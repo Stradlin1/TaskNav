@@ -120,13 +120,23 @@ TaskNav V1 暂时不引入：
 evidence_fc = Linear(512, 56)
 ~~~
 
-TaskNav 目标输出：
+TaskNav 目标输出采用动态任务维度 N：
 
 ~~~text
-cls      [B, 161, 56, 3]
-offset   [B,   1, 56, 3]
-evidence [B,   1, 56, 3]
+cls      [B, 161, 56, N]
+offset   [B,   1, 56, N]
+evidence [B,   1, 56, N]
 ~~~
+
+默认配置保持 `N = 4`，因此默认输出仍为：
+
+~~~text
+cls      [B, 161, 56, 4]
+offset   [B,   1, 56, 4]
+evidence [B,   1, 56, 4]
+~~~
+
+N 不在模型源码中写死，后续目标是仅通过 `default.yaml` 修改 `lane_num_lanes` 即可切换任意 N 类导航线任务。
 
 其中：
 
@@ -138,27 +148,47 @@ Evidence Head 输出 logits，训练时使用 `BCEWithLogitsLoss`，推理时再
 
 ---
 
-## 4. 导航任务从 4 个通用槽位统一为 3 个功能槽位
+## 4. 保留 4 个默认任务槽位，并支持任意 N 类动态切换
 
-当前 LMM 是 4 个独立 task。TaskNav 正式数据协议目标改为：
+当前 LMM 是 4 个独立 task。TaskNav **不把 4 个任务缩减为 3 个**，默认继续保留 4 个独立分支。
+
+默认功能定义建议为：
 
 ~~~text
 task 0 -> reference_guide
 task 1 -> left_boundary
 task 2 -> right_boundary
+task 3 -> reserve_3
 ~~~
 
-即：
+其中 task 3 作为备用槽位，暂时没有正式导航语义时可以保持空任务 / no-lane；后续如果项目增加新的导航结构类型，可直接赋予新的语义并重新训练，而不需要重新改网络结构。
+
+更重要的长期目标不是“固定四类”，而是让 `LaneRobotV2Independent` 成为 **动态 N 任务模型**：
 
 ~~~text
-num_lanes = 3
+N = lane_num_lanes
 ~~~
 
-说明：
+模型根据 N 自动创建：
 
-- 初始 LMM 四任务代码保留作为工程来源和回归基线；
-- TaskNav 正式模型使用相同的 Independent Branch 思路，但只实例化 3 个导航功能分支；
-- 白线、色块边界、锥桶等不再按“物体类型”决定 task，而按它们对机器人导航的作用归入 G / L / R。
+~~~text
+task branch 0
+task branch 1
+...
+task branch N-1
+~~~
+
+因此：
+
+- 默认仍使用 `N = 4`；
+- 需要 3 类时，可在 `default.yaml` 中改为 `lane_num_lanes: 3`；
+- 需要 5 类、6 类或更多任务时，同样只修改配置；
+- Head、Dataset、Loss、Validator、Predictor、ONNX 导出都必须从运行时 N 自动推导形状，禁止继续写死 4；
+- 白线、色块边界、锥桶等视觉载体仍按“导航功能”归入对应 task，而不是按物体类型建立类别。
+
+最终目标是：
+
+> **修改 `default.yaml` 就能切换 N 类导航线任务，不需要再改 Python 源码，也不需要手工修改模型 YAML 或数据 YAML 中的固定任务数。**
 
 ---
 
@@ -599,13 +629,15 @@ cls_logits
 offset
 ~~~
 
-TaskNav V1 目标增加第三个输出：
+TaskNav V1 目标增加第三个输出，并统一使用动态任务维度 N：
 
 ~~~text
-cls_logits      [B, 161, 56, 3]
-offset          [B,   1, 56, 3]
-evidence_logits [B,   1, 56, 3]
+cls_logits      [B, 161, 56, N]
+offset          [B,   1, 56, N]
+evidence_logits [B,   1, 56, N]
 ~~~
+
+默认 `N = 4`。ONNX 导出脚本不得写死第四维为 4，必须从实际模型配置读取任务数。
 
 第一版优先保持三个独立输出，不急于合并。
 
@@ -653,31 +685,75 @@ Y_END   = 1.0
 
 ---
 
-## 15. 配置文件目标
+## 15. 配置文件目标：default.yaml 作为任务数量的唯一入口
 
-建议新建 TaskNav 自己的配置，而不是继续覆盖 LMM 文件。
+TaskNav 的配置目标是让 `default.yaml` 成为任务数量与任务名称的主要控制入口。
 
-建议：
-
-~~~text
-ultralytics/cfg/datasets/tasknav.yaml
-ultralytics/cfg/models/26/yolo26s-tasknav.yaml
-~~~
-
-数据配置目标：
+默认仍保持 4 个任务：
 
 ~~~yaml
-x_grids: 160
-row_anchors: 56
-num_lanes: 3
+lane_num_lanes: 4
+lane_task_names:
+  - reference_guide
+  - left_boundary
+  - right_boundary
+  - reserve_3
 
-names:
-  0: reference_guide
-  1: left_boundary
-  2: right_boundary
+lane_task_weights: [1.0, 1.0, 1.0, 1.0]
 ~~~
 
-同时在 `default.yaml` 增加：
+如果以后需要切换成 N 类，只修改 `default.yaml`：
+
+~~~yaml
+lane_num_lanes: N
+lane_task_names: [task_0, task_1, ..., task_N-1]
+lane_task_weights: [w0, w1, ..., wN-1]
+~~~
+
+要求：
+
+1. `lane_task_names` 长度必须等于 `lane_num_lanes`；
+2. `lane_task_weights` 长度必须等于 `lane_num_lanes`；
+3. Dataset 标签中的 `task_id` 合法范围自动变为 `0 ~ N-1`；
+4. `LaneRobotV2Independent` 自动创建 N 个 `SingleLaneRobotV2Branch`；
+5. Loss 自动遍历 N 个任务；
+6. Validator / Predictor / Plotting 自动遍历 N 个任务；
+7. ONNX / RDK 输出最后一维自动为 N；
+8. 代码中不允许再出现依赖“固定 4 类”的硬编码逻辑。
+
+### 当前代码需要为此做的配置解耦
+
+当前 LMM 基线中，任务数同时出现在多个位置：
+
+~~~text
+default.yaml
+lane-robot-4tasks.yaml
+yolo26s-lane-independent.yaml
+~~~
+
+而当前 Dataset 还会优先读取 data YAML 中的 `num_lanes`，这会导致只改 `default.yaml` 不能真正切换 N。
+
+TaskNav 后续需要调整配置优先级，使：
+
+~~~text
+default.yaml / runtime args
+        ↓
+成为 lane_num_lanes 的单一运行时真值
+        ↓
+Model / Dataset / Loss / Val / Predict / Export
+全部使用同一个 N
+~~~
+
+具体目标：
+
+- Model 构建前，用运行时 `lane_num_lanes` 覆盖模型 YAML 中的固定 `num_lanes`；
+- Dataset 优先读取 `args.lane_num_lanes`，不让 data YAML 的旧固定值覆盖运行时配置；
+- data YAML 主要保留路径、Row Anchor 范围等数据描述，不再作为任务数量的独立真值源；
+- 模型 YAML 中的 `num_lanes: 4` 仅可作为默认兼容值，运行时必须允许被 `default.yaml` 覆盖；
+- 所有 shape check 和循环都使用实际 `self.num_lanes` / N；
+- 切换 N 后若加载旧 checkpoint，必须明确提示 Head 维度不匹配，不能静默错误加载。
+
+同时在 `default.yaml` 增加 TaskNav 配置：
 
 ~~~text
 lane_evidence
@@ -821,7 +897,7 @@ Depth 是安全约束和闭环系统扩展，不是 TaskNav 导航结构感知�
 
 1. **先保证当前 LMM baseline 可复现。**
 2. **修复 Row Anchor 训练 / 推理不一致。**
-3. **建立 G / L / R 三任务数据协议。**
+3. **建立默认 4 槽位、可配置 N 类的 TaskNav 数据协议。**
 4. **修改 Dataset 支持完整 Geometry GT + Evidence 标签 + ignore。**
 5. **建立 Unified LaneRobot baseline。**
 6. **增加 Evidence Head。**
@@ -840,7 +916,8 @@ Depth 是安全约束和闭环系统扩展，不是 TaskNav 导航结构感知�
 
 TaskNav V1 至少满足：
 
-- G / L / R 三类导航功能结构可以正常训练和预测；
+- 默认 4 个任务槽位可以正常训练和预测，其中前三个可用于 G / L / R，第四个保留备用；
+- 仅修改 `default.yaml` 即可切换到任意 N 类任务，模型、Dataset、Loss、Validator、Predictor 与 ONNX 输出自动同步；
 - 被遮挡区域仍输出连续正确的 Geometry；
 - Evidence Head 能区分直接观测点和恢复点；
 - 真正不存在结构时能够输出 no-lane，而不是无条件补线；
@@ -855,7 +932,9 @@ TaskNav V1 至少满足：
 
 ## 20. 一句话定义 TaskNav V1
 
-> **TaskNav V1 = LaneRobotV2Independent + G/L/R 导航功能表示 + 完整导航结构监督 + Evidence 辅助监督 + Navigation Cue Dropout。**
+> **TaskNav V1 = 动态 N 类 LaneRobotV2Independent + 导航功能表示 + 完整导航结构监督 + Evidence 辅助监督 + Navigation Cue Dropout。**
+
+默认使用 4 个任务槽位：`reference_guide / left_boundary / right_boundary / reserve_3`；任务数量 N 由 `default.yaml` 控制。
 
 其中最重要的任务定义是：
 
