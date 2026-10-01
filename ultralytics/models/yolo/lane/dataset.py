@@ -41,8 +41,8 @@ class LaneRobotDataset(Dataset):
         self.row_anchors = int(data.get("row_anchors", data.get("lane_row_anchors", getattr(args, "lane_row_anchors", 56))))
         self.x_grids = int(data.get("x_grids", data.get("lane_x_grids", getattr(args, "lane_x_grids", 640))))
         self.num_lanes = int(data.get("num_lanes", data.get("lane_num_lanes", getattr(args, "lane_num_lanes", 2))))
-        self.y_start = float(data.get("y_start", data.get("lane_y_start", getattr(args, "lane_y_start", 0.67))))
-        self.y_end = float(data.get("y_end", data.get("lane_y_end", getattr(args, "lane_y_end", 1.0))))
+        self.y_start = float(data.get("y_start", data.get("lane_y_start", getattr(args, "lane_y_start", 1.0))))
+        self.y_end = float(data.get("y_end", data.get("lane_y_end", getattr(args, "lane_y_end", 0.3333333333))))
         self.imgsz = _imgsz_to_hw(getattr(args, "imgsz", data.get("imgsz", [256, 320])))
         self.label_dir = data.get(f"{mode}_labels") or data.get("labels") or None
         if self.label_dir:
