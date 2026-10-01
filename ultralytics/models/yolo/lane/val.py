@@ -158,6 +158,7 @@ class LaneRobotValidator(BaseValidator):
             target_x = torch.where(batch["lane"] == self.no_lane_idx, torch.full_like(target_x, -1.0), target_x)
         valid = target_x >= 0
         pred_valid = pred_x >= 0
+        matched = valid & pred_valid
 
         if valid.any():
             err = (pred_x[valid] - target_x[valid]).abs()
@@ -165,9 +166,11 @@ class LaneRobotValidator(BaseValidator):
             img_w = float(batch["img"].shape[-1])
             self.mae_px_sum += float((err * (img_w / max(self.x_grids, 1))).sum().item())
             self.valid_total += int(valid.sum().item())
-            self.tol1 += int((err <= 1).sum().item())
-            self.tol3 += int((err <= 3).sum().item())
-            self.tol5 += int((err <= 5).sum().item())
+            if matched.any():
+                matched_err = (pred_x[matched] - target_x[matched]).abs()
+                self.tol1 += int((matched_err <= 1).sum().item())
+                self.tol3 += int((matched_err <= 3).sum().item())
+                self.tol5 += int((matched_err <= 5).sum().item())
 
         self.exist_correct += int((pred_valid == valid).sum().item())
         self.exist_total += int(valid.numel())

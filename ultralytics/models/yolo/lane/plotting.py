@@ -41,12 +41,14 @@ def decode_lane(preds, no_lane_idx=None, topk=5, exist_thr=0.5, post_smooth=Fals
         no_lane_idx = logits.shape[1] - 1
     x_grids = int(no_lane_idx)
     cls_logits = logits[:, :x_grids]
-    probs = cls_logits.softmax(dim=1)
-    k = max(1, min(int(topk), x_grids))
-    topv, topi = probs.topk(k=k, dim=1)
-    pred_x = (topv * topi.float()).sum(dim=1) / topv.sum(dim=1).clamp_min(1e-6)
     if offset is not None:
-        pred_x = pred_x + offset.squeeze(1).clamp(-0.5, 0.5)
+        # LaneRobotV2 predicts a nearest-grid class and a signed residual from that grid.
+        pred_x = cls_logits.argmax(dim=1).to(logits.dtype) + offset.squeeze(1).clamp(-0.5, 0.5)
+    else:
+        probs = cls_logits.softmax(dim=1)
+        k = max(1, min(int(topk), x_grids))
+        topv, topi = probs.topk(k=k, dim=1)
+        pred_x = (topv * topi.to(logits.dtype)).sum(dim=1) / topv.sum(dim=1).clamp_min(1e-6)
     no_lane_prob = logits.softmax(dim=1)[:, no_lane_idx]
     valid = no_lane_prob < float(exist_thr)
     pred_x = torch.where(valid, pred_x, torch.full_like(pred_x, -1.0))

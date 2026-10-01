@@ -1329,17 +1329,19 @@ class LaneRobotLoss:
         valid = target != self.no_lane_idx
         return target, target_x, valid
 
-    def _local_soft_argmax(self, logits, offset=None):
+    def _decode_x(self, logits, offset=None):
         import torch
 
         cls_logits = logits[:, : self.x_grids]
+        if offset is not None:
+            # LaneRobotV2 offset is a signed residual from the nearest discrete grid class.
+            base = cls_logits.argmax(dim=1).to(logits.dtype)
+            return base + offset.squeeze(1).clamp(-0.5, 0.5)
+
         k = max(1, min(int(self.topk), self.x_grids))
         probs = cls_logits.softmax(dim=1)
         topv, topi = probs.topk(k=k, dim=1)
-        x = (topv * topi.float()).sum(dim=1) / topv.sum(dim=1).clamp_min(1e-6)
-        if offset is not None:
-            x = x + offset.squeeze(1).clamp(-0.5, 0.5)
-        return x
+        return (topv * topi.to(logits.dtype)).sum(dim=1) / topv.sum(dim=1).clamp_min(1e-6)
 
     def _soft_label_ce(self, logits, target, target_x, valid):
         import torch
@@ -1349,7 +1351,10 @@ class LaneRobotLoss:
             return logits.sum() * 0.0
         c = logits.shape[1]
         grid = torch.arange(c, device=logits.device, dtype=logits.dtype).view(1, c, 1, 1)
-        target_float = target_x.clamp(0, self.x_grids - 1).unsqueeze(1)
+        # The classification branch predicts the nearest discrete grid. Keep its soft-label distribution centered
+        # on that grid so the separate offset branch can learn the signed sub-grid residual without double-counting
+        # the fractional part already represented by a continuous soft-label center.
+        target_float = target.clamp(0, self.x_grids - 1).to(logits.dtype).unsqueeze(1)
         soft = torch.exp(-0.5 * ((grid - target_float) / max(self.soft_sigma, 1e-6)) ** 2)
         soft[:, self.no_lane_idx : self.no_lane_idx + 1] = 0.0
         soft = soft / soft.sum(dim=1, keepdim=True).clamp_min(1e-6)
@@ -1377,7 +1382,7 @@ class LaneRobotLoss:
         lane_exist_logit = torch.logsumexp(logits[:, : self.x_grids], dim=1) - no_lane_logit
         exist = F.binary_cross_entropy_with_logits(lane_exist_logit, valid.float())
 
-        pred_x = self._local_soft_argmax(logits, offset=offset)
+        pred_x = self._decode_x(logits, offset=offset)
         if valid.any():
             loc = F.smooth_l1_loss(
                 pred_x[valid] / max(self.x_grids - 1, 1),
@@ -1387,7 +1392,7 @@ class LaneRobotLoss:
             loc = logits.sum() * 0.0
 
         if offset is not None and valid.any():
-            base = target_x.floor().clamp(0, self.x_grids - 1)
+            base = target.clamp(0, self.x_grids - 1).to(target_x.dtype)
             off_t = (target_x - base).clamp(-0.5, 0.5)
             offset_loss = F.smooth_l1_loss(offset.squeeze(1)[valid], off_t[valid])
         else:

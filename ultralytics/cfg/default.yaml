@@ -124,7 +124,7 @@ lane_offset: 3.0 # (float) sub-grid offset SmoothL1 loss gain for LaneRobotV2
 lane_curv: 0.02 # (float) second-order curvature regularization gain
 lane_soft_label: True # (bool) use Gaussian soft labels for visible x classes
 lane_soft_sigma: 1.2 # (float) Gaussian sigma in x-grid units for soft-label CE
-lane_softargmax_topk: 5 # (int) local top-k soft-argmax window for decoding and loc loss
+lane_softargmax_topk: 5 # (int) local top-k soft-argmax window for legacy cls-only outputs; V2 uses argmax + offset
 lane_exist_thr: 0.5 # (float) no-lane probability threshold; lower means stricter existence
 lane_post_smooth: True # (bool) apply polynomial smoothing in visualization/predict decoding
 lane_poly_degree: 2 # (int) polynomial degree for lane post-smoothing
