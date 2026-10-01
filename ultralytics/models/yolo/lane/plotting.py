@@ -62,7 +62,7 @@ def decode_lane(preds, no_lane_idx=None, topk=5, exist_thr=0.5, post_smooth=Fals
     return arr
 
 
-def _row_y_pixels(row_anchors, h, row_y=None, y_start=0.67, y_end=1.0):
+def _row_y_pixels(row_anchors, h, row_y=None, y_start=1.0, y_end=0.3333333333):
     if row_y is not None:
         if hasattr(row_y, 'detach'):
             row_y = row_y.detach().cpu().numpy()
@@ -72,7 +72,7 @@ def _row_y_pixels(row_anchors, h, row_y=None, y_start=0.67, y_end=1.0):
     return np.linspace(float(y_start), float(y_end), row_anchors) * (h - 1)
 
 
-def draw_lanes_on_image(img, lane_xy, x_grids, row_anchors, row_y=None, y_start=0.67, y_end=1.0, radius=2):
+def draw_lanes_on_image(img, lane_xy, x_grids, row_anchors, row_y=None, y_start=1.0, y_end=0.3333333333, radius=2):
     """Draw lane points from [Y, L] x-grid labels on an RGB CHW or HWC image."""
     if hasattr(img, "detach"):
         img = img.detach().cpu().numpy()
@@ -101,7 +101,7 @@ def draw_lanes_on_image(img, lane_xy, x_grids, row_anchors, row_y=None, y_start=
     return np.asarray(pil)
 
 
-def save_lane_grid(images, preds, targets, x_grids, row_anchors, save_path: Path, max_images=8, row_y=None, y_start=0.67, y_end=1.0):
+def save_lane_grid(images, preds, targets, x_grids, row_anchors, save_path: Path, max_images=8, row_y=None, y_start=1.0, y_end=0.3333333333):
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     images = images[:max_images]
