@@ -129,6 +129,7 @@ class LaneRobotValidator(BaseValidator):
         self.mae_sum = 0.0
         self.mae_px_sum = 0.0
         self.valid_total = 0
+        self.matched_total = 0
         self.tol1 = 0
         self.tol3 = 0
         self.tol5 = 0
@@ -161,13 +162,15 @@ class LaneRobotValidator(BaseValidator):
         matched = valid & pred_valid
 
         if valid.any():
-            err = (pred_x[valid] - target_x[valid]).abs()
-            self.mae_sum += float(err.sum().item())
-            img_w = float(batch["img"].shape[-1])
-            self.mae_px_sum += float((err * (img_w / max(self.x_grids, 1))).sum().item())
             self.valid_total += int(valid.sum().item())
             if matched.any():
+                # Localization metrics are defined only where both GT and prediction exist.
+                # Misses are penalized by tolerance accuracy/existence metrics rather than as x=-1 coordinates.
                 matched_err = (pred_x[matched] - target_x[matched]).abs()
+                self.mae_sum += float(matched_err.sum().item())
+                img_w = float(batch["img"].shape[-1])
+                self.mae_px_sum += float((matched_err * (img_w / max(self.x_grids, 1))).sum().item())
+                self.matched_total += int(matched.sum().item())
                 self.tol1 += int((matched_err <= 1).sum().item())
                 self.tol3 += int((matched_err <= 3).sum().item())
                 self.tol5 += int((matched_err <= 5).sum().item())
@@ -177,8 +180,9 @@ class LaneRobotValidator(BaseValidator):
 
     def get_stats(self):
         valid_total = max(self.valid_total, 1)
-        mae = self.mae_sum / valid_total
-        mae_px = self.mae_px_sum / valid_total
+        matched_total = max(self.matched_total, 1)
+        mae = self.mae_sum / matched_total
+        mae_px = self.mae_px_sum / matched_total
         tol1 = self.tol1 / valid_total
         tol3 = self.tol3 / valid_total
         tol5 = self.tol5 / valid_total
@@ -225,8 +229,8 @@ class LaneRobotValidator(BaseValidator):
             row_anchors=self.row_anchors,
             save_path=self.save_dir / f"val_batch{ni}_labels.jpg",
             row_y=batch.get("lane_y"),
-            y_start=float(getattr(self.args, "lane_y_start", 0.67)),
-            y_end=float(getattr(self.args, "lane_y_end", 1.0)),
+            y_start=float(getattr(self.args, "lane_y_start", 1.0)),
+            y_end=float(getattr(self.args, "lane_y_end", 0.3333333333)),
         )
 
     def plot_predictions(self, batch, preds, ni):
@@ -249,6 +253,6 @@ class LaneRobotValidator(BaseValidator):
             row_anchors=self.row_anchors,
             save_path=self.save_dir / f"val_batch{ni}_pred.jpg",
             row_y=batch.get("lane_y"),
-            y_start=float(getattr(self.args, "lane_y_start", 0.67)),
-            y_end=float(getattr(self.args, "lane_y_end", 1.0)),
+            y_start=float(getattr(self.args, "lane_y_start", 1.0)),
+            y_end=float(getattr(self.args, "lane_y_end", 0.3333333333)),
         )
