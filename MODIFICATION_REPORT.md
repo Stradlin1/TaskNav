@@ -227,15 +227,17 @@ pytest tests/test_lane_validator_metrics.py
 
 与 default.yaml、lane-robot-4tasks.yaml 和 strict manual protocol 一致。标准配置缺失部分几何参数时，不再回退到历史 0.67 -> 1.0 协议。
 
-### 5.2 默认 lane-robot.yaml 仍为 legacy
+### 5.2 通用 lane 默认入口已统一
+
+框架默认映射已经改为当前四任务 baseline：
 
 ~~~text
-ultralytics/cfg/datasets/lane-robot.yaml
+TASK2DATA["lane"]            -> lane-robot-4tasks.yaml
+TASK2CALIBRATIONDATA["lane"] -> lane-robot-4tasks.yaml
+TASK2MODEL["lane"]           -> yolo26s-lane-independent.yaml
 ~~~
 
-当前仍是旧单任务、旧机器路径、旧 y 几何。
-
-四任务 baseline 不使用它，但 Ultralytics 通用 lane 默认映射仍可能引用该文件，因此后续应重定向或更新。
+lane-robot.yaml 作为兼容文件名保留，但内容与当前四任务 strict manual 数据配置同步，不再使用旧绝对路径、单任务配置或旧 Row Anchor 几何。
 
 ### 5.3 动态 N 尚未实现
 
@@ -292,7 +294,7 @@ ONNX 两输出 + ORT parity
 ## 7. 当前推荐验证流程
 
 ~~~text
-1. 处理 legacy lane-robot.yaml，并确认核心 Row Anchor fallback 已统一
+1. 确认通用 lane 默认入口与 Row Anchor fallback 均保持四任务 baseline 协议
 2. 本机跑 protocol + validator 单元测试
 3. 1~3 epoch smoke run
 4. 检查 loss / shape / metrics / plots / checkpoint

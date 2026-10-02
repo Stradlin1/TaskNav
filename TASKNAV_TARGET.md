@@ -200,23 +200,17 @@ TaskNav Evidence Head 尚未实现，因此当前不是三输出。
 
 Dataset、Trainer、Validator 和 Plotting 的默认 Row Anchor 语义现在与 strict manual protocol 一致。
 
-### 6.2 处理 legacy lane-robot.yaml
+### 6.2 通用 lane 默认入口已统一
 
-当前：
-
-~~~text
-ultralytics/cfg/datasets/lane-robot.yaml
-~~~
-
-仍是旧单任务、旧绝对路径和旧 Row Anchor 配置。
-
-当前四任务 baseline 使用：
+当前通用 lane 默认映射已经指向四任务 baseline：
 
 ~~~text
-lane-robot-4tasks.yaml
+TASK2DATA["lane"]            -> lane-robot-4tasks.yaml
+TASK2CALIBRATIONDATA["lane"] -> lane-robot-4tasks.yaml
+TASK2MODEL["lane"]           -> yolo26s-lane-independent.yaml
 ~~~
 
-后续需要明确 legacy 文件是删除、重定向还是更新，避免通用 task=lane 入口误用旧配置。
+lane-robot.yaml 仅作为兼容文件名保留，其内容已同步到当前四任务 strict manual 配置。
 
 ### 6.3 本机运行新增测试
 
@@ -635,7 +629,7 @@ evidence_logits [B,1,56,N]
 ~~~text
 A. Baseline correctness
    1. Row Anchor fallback 已统一（保持回归测试）
-   2. 处理 legacy lane-robot.yaml
+   2. 通用 lane 默认入口已统一（保持配置回归检查）
    3. 跑 protocol / validator tests
    4. smoke run
    5. ONNX parity

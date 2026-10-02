@@ -1,23 +1,31 @@
-# LaneRobot row-anchor dataset template
+# Compatibility filename for TaskNav LaneRobot data.
+# The canonical four-task configuration is lane-robot-4tasks.yaml.
+# Keep this file synchronized so older callers that explicitly request lane-robot.yaml
+# cannot silently fall back to the historical single-task / 0.67->1.0 geometry.
+
 # Label format per line:
 #   lane_id x1 y1 x2 y2 ... x56 y56
 # x is normalized [0,1]; x=-1 means absent/no-lane. y is normalized [0,1].
-# Default label path follows images/... -> labels/... with the same basename and .txt suffix.
+# Paths are relative to the repository root when launched through train.py.
 
-path: /home/baater/ultralytics/datasets
+path: datasets/datasets
 train: images/train
 val: images/valid
 
-# Optional explicit label roots. Remove these to use images/... -> labels/... convention.
-# train_labels: labels/train
-# val_labels: labels/val
+# Use the manually corrected labels instead of the default images/... -> labels/... convention.
+train_labels: labels_corrected/train
+val_labels: labels_corrected/valid
+strict_labels: true
 
 x_grids: 160
 row_anchors: 56
-num_lanes: 1
-y_start: 0.67
-y_end: 1.0
+num_lanes: 4
+y_start: 1.0
+y_end: 0.3333333333
 channels: 3
-nc: 1
+nc: 4
 names:
-  0: lane_0
+  0: lane_task_0
+  1: lane_task_1
+  2: lane_task_2
+  3: lane_task_3

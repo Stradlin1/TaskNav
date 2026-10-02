@@ -444,24 +444,23 @@ row 55 = image height 1/3
 order  = bottom-to-top
 ~~~
 
-### 9.2 lane-robot.yaml 仍是 legacy 单任务配置
+### 9.2 通用 lane 默认入口已统一到四任务 baseline
 
-当前：
+Ultralytics 通用映射现在使用：
+
+~~~text
+TASK2DATA["lane"]            = lane-robot-4tasks.yaml
+TASK2CALIBRATIONDATA["lane"] = lane-robot-4tasks.yaml
+TASK2MODEL["lane"]           = yolo26s-lane-independent.yaml
+~~~
+
+旧文件名：
 
 ~~~text
 ultralytics/cfg/datasets/lane-robot.yaml
 ~~~
 
-仍保留旧单任务配置、旧绝对路径以及：
-
-~~~text
-y_start: 0.67
-y_end: 1.0
-~~~
-
-当前 python train.py 不使用该文件；四任务 baseline 使用 lane-robot-4tasks.yaml。
-
-在后续统一通用 lane 入口前，不应把 lane-robot.yaml 作为当前 TaskNav 四任务数据配置。
+仍保留用于兼容显式引用，但内容已同步为当前四任务 strict manual 配置，不再包含历史绝对路径、单任务 num_lanes=1 或 0.67 -> 1.0 几何。
 
 ### 9.3 动态 N 尚未实现
 

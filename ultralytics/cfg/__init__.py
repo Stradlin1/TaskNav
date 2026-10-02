@@ -63,7 +63,7 @@ TASK2DATA = {
     "classify": "imagenet10",
     "pose": "coco8-pose.yaml",
     "obb": "dota8.yaml",
-    "lane": "lane-robot.yaml",
+    "lane": "lane-robot-4tasks.yaml",
 }
 TASK2CALIBRATIONDATA = {
     "detect": "coco128.yaml",
@@ -71,7 +71,7 @@ TASK2CALIBRATIONDATA = {
     "classify": "imagenet100",
     "pose": "coco8-pose.yaml",
     "obb": "dota128.yaml",
-    "lane": "lane-robot.yaml",
+    "lane": "lane-robot-4tasks.yaml",
 }
 TASK2MODEL = {
     "detect": "yolo26n.pt",
@@ -79,7 +79,7 @@ TASK2MODEL = {
     "classify": "yolo26n-cls.pt",
     "pose": "yolo26n-pose.pt",
     "obb": "yolo26n-obb.pt",
-    "lane": "yolo26n-lane.yaml",
+    "lane": "yolo26s-lane-independent.yaml",
 }
 TASK2METRIC = {
     "detect": "metrics/mAP50-95(B)",
