@@ -92,6 +92,25 @@ class TestTaskNavManualProtocol(unittest.TestCase):
         self.assertEqual(int(sample["lane"][1, 0]), round(0.6 * 159))
         np.testing.assert_allclose(sample["lane_y"].numpy(), manual_y_anchors(), rtol=0.0, atol=0.0)
 
+    def test_preflight_accepts_valid_and_empty_manual_labels(self):
+        dataset = self._make_dataset(self._line())
+        stats = dataset.preflight_validate_labels()
+        self.assertEqual(stats, {"images": 1, "labels": 1, "annotations": 1, "empty_labels": 0})
+
+        empty_dataset = self._make_dataset("")
+        empty_stats = empty_dataset.preflight_validate_labels()
+        self.assertEqual(empty_stats, {"images": 1, "labels": 1, "annotations": 0, "empty_labels": 1})
+
+    def test_preflight_rejects_bad_label_before_getitem(self):
+        dataset = self._make_dataset("0 0.5 1.0\n")
+        with self.assertRaisesRegex(ValueError, "expected 113"):
+            dataset.preflight_validate_labels()
+
+    def test_preflight_rejects_missing_label(self):
+        dataset = self._make_dataset(write_label=False)
+        with self.assertRaisesRegex(FileNotFoundError, "preflight"):
+            dataset.preflight_validate_labels()
+
     def test_dataset_rejects_wrong_point_count(self):
         dataset = self._make_dataset("0 0.5 1.0\n")
         with self.assertRaisesRegex(ValueError, "expected 113"):

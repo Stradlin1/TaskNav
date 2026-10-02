@@ -59,6 +59,43 @@ class LaneRobotDataset(Dataset):
             raise FileNotFoundError(f"No lane images found in {self.img_path}")
         self.labels = [self._label_path(p) for p in self.im_files]
 
+    def preflight_validate_labels(self) -> dict[str, int]:
+        """Validate every strict manual label before the first training batch.
+
+        This intentionally reads labels only; images are not decoded. Empty .txt files are valid and mean
+        that every task is absent for that image.
+        """
+        if not self.strict_labels:
+            return {"images": len(self.im_files), "labels": 0, "annotations": 0, "empty_labels": 0}
+
+        validate_manual_geometry(self.row_anchors, self.y_start, self.y_end)
+        annotations = 0
+        empty_labels = 0
+
+        for image_path, label_path in zip(self.im_files, self.labels):
+            if not label_path.is_file():
+                raise FileNotFoundError(
+                    f"Lane protocol preflight ({self.mode}) found no manual label for image {image_path}: {label_path}"
+                )
+            if label_path.suffix.lower() != ".txt":
+                raise ValueError(
+                    f"Lane protocol preflight ({self.mode}) requires .txt labels, got {label_path}"
+                )
+            records = parse_manual_label(
+                label_path.read_text(encoding="utf-8-sig"),
+                label_path,
+                self.num_lanes,
+            )
+            annotations += len(records)
+            empty_labels += int(len(records) == 0)
+
+        return {
+            "images": len(self.im_files),
+            "labels": len(self.labels),
+            "annotations": annotations,
+            "empty_labels": empty_labels,
+        }
+
     @staticmethod
     def _scan_images(path: Path):
         if path.is_file():

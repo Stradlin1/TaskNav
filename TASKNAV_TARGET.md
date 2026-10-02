@@ -212,7 +212,13 @@ TASK2MODEL["lane"]           -> yolo26s-lane-independent.yaml
 
 lane-robot.yaml 仅作为兼容文件名保留，其内容已同步到当前四任务 strict manual 配置。
 
-### 6.3 本机运行新增测试
+### 6.3 全量 label preflight 已接入训练入口
+
+当 strict_labels=true 时，LaneRobotTrainer 在 train / val DataLoader 创建阶段会遍历该 split 的全部 manual txt，并复用 protocol.py 的严格解析器。缺失文件、56 点错误、Y 顺序错误、非法 x、task_id、重复 task、NaN / Inf 都会在 epoch 1 前直接报错。
+
+preflight 只读取标签，不解码图片；空 txt 仍合法。通过时打印 images / labels / annotations / empty labels 统计。
+
+### 6.4 本机运行新增测试
 
 当前已有：
 
@@ -223,7 +229,7 @@ tests/test_lane_validator_metrics.py
 
 仓库暂无 GitHub Actions workflow，不能把“测试已提交”写成“CI 已通过”。
 
-### 6.4 smoke run + 从头正式训练
+### 6.5 smoke run + 从头正式训练
 
 旧规则下的 checkpoint 不用于判断最新 baseline 精度。
 
@@ -630,35 +636,36 @@ evidence_logits [B,1,56,N]
 A. Baseline correctness
    1. Row Anchor fallback 已统一（保持回归测试）
    2. 通用 lane 默认入口已统一（保持配置回归检查）
-   3. 跑 protocol / validator tests
-   4. smoke run
-   5. ONNX parity
-   6. 从头正式训练并冻结 baseline
+   3. 全量 train / val label preflight 已接入（保持回归测试）
+   4. 跑 protocol / validator tests
+   5. smoke run
+   6. ONNX parity
+   7. 从头正式训练并冻结 baseline
 
 B. TaskNav configuration
-   7. 动态 N
-   8. 明确 task names / weights
+   8. 动态 N
+   9. 明确 task names / weights
 
 C. TaskNav data
-   9. 完整 Geometry GT
-  10. ignore mask
-  11. Evidence 标签
+  10. 完整 Geometry GT
+  11. ignore mask
+  12. Evidence 标签
 
 D. TaskNav model
-  12. Evidence Head
-  13. Evidence Loss
-  14. Visible / Missing / Evidence metrics
+  13. Evidence Head
+  14. Evidence Loss
+  15. Visible / Missing / Evidence metrics
 
 E. Robustness
-  15. Navigation Cue Dropout
-  16. 缺失比例实验
-  17. 异质视觉载体实验
-  18. 防幻觉实验
+  16. Navigation Cue Dropout
+  17. 缺失比例实验
+  18. 异质视觉载体实验
+  19. 防幻觉实验
 
 F. Deployment
-  19. ONNX 三输出
-  20. RDK X5 INT8
-  21. 实车闭环
+  20. ONNX 三输出
+  21. RDK X5 INT8
+  22. 实车闭环
 ~~~
 
 ## 19. 实验路线

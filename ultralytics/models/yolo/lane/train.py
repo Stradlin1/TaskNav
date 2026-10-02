@@ -51,6 +51,16 @@ class LaneRobotTrainer(BaseTrainer):
 
     def get_dataloader(self, dataset_path: str, batch_size: int = 16, rank: int = 0, mode: str = "train"):
         dataset = self.build_dataset(dataset_path, mode, batch_size)
+        if dataset.strict_labels:
+            stats = dataset.preflight_validate_labels()
+            LOGGER.info(
+                "Lane protocol preflight PASS (%s): %d images, %d labels, %d annotations, %d empty labels",
+                mode,
+                stats["images"],
+                stats["labels"],
+                stats["annotations"],
+                stats["empty_labels"],
+            )
         return DataLoader(
             dataset,
             batch_size=batch_size,

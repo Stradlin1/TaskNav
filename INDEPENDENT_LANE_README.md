@@ -149,8 +149,11 @@ lane_strict_labels: True
 ~~~text
 ultralytics/models/yolo/lane/protocol.py
 ultralytics/models/yolo/lane/dataset.py
+ultralytics/models/yolo/lane/train.py
 tests/test_tasknav_lane_protocol.py
 ~~~
+
+训练器现在会在创建 train / val DataLoader 时先运行全量 label preflight。它只读取标签，不解码图片；任一缺失或非法标签会在 epoch 1 之前直接终止。空 txt 仍是合法的全任务 absent 样本。
 
 ## 4. Dataset 与训练语义
 
@@ -406,7 +409,9 @@ pytest tests/test_tasknav_lane_protocol.py
 pytest tests/test_lane_validator_metrics.py
 ~~~
 
-并继续做短周期 smoke run，确认：
+标准训练入口还会自动执行 train / val 全量 manual-label preflight，并打印 images / labels / annotations / empty labels 统计。只有 preflight 全部通过才会进入训练 batch。
+
+随后继续做短周期 smoke run，确认：
 
 - 数据可完整加载；
 - loss finite；

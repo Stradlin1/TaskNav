@@ -106,6 +106,8 @@ tests/test_tasknav_lane_protocol.py
 - NaN / Inf；
 - strict 模式缺失 txt。
 
+训练器新增全量 preflight：train / val DataLoader 创建前遍历每个 image 对应的 manual txt，复用同一 parse_manual_label 严格协议。任一错误会在 epoch 1 前 fail-fast；空标签文件继续作为合法全 absent 样本。
+
 ### 2.4 Validator
 
 Validator 已重构为“定位质量”和“存在性”分离。
@@ -294,16 +296,17 @@ ONNX 两输出 + ORT parity
 ## 7. 当前推荐验证流程
 
 ~~~text
-1. 确认通用 lane 默认入口与 Row Anchor fallback 均保持四任务 baseline 协议
+1. 确认通用 lane 默认入口、Row Anchor fallback 和全量 label preflight 均保持四任务 baseline 协议
 2. 本机跑 protocol + validator 单元测试
-3. 1~3 epoch smoke run
-4. 检查 loss / shape / metrics / plots / checkpoint
-5. 导出 ONNX
-6. 通过 ONNX Runtime parity
-7. 从头正式训练 baseline
-8. 记录 best epoch 与完整四任务指标
-9. 冻结 baseline
-10. 再开始 TaskNav Evidence / Missing Geometry 实验
+3. 运行标准入口并确认 train / val preflight PASS
+4. 1~3 epoch smoke run
+5. 检查 loss / shape / metrics / plots / checkpoint
+6. 导出 ONNX
+7. 通过 ONNX Runtime parity
+8. 从头正式训练 baseline
+9. 记录 best epoch 与完整四任务指标
+10. 冻结 baseline
+11. 再开始 TaskNav Evidence / Missing Geometry 实验
 ~~~
 
 ## 8. Baseline 冻结时应记录
