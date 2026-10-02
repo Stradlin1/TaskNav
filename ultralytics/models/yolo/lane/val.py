@@ -51,41 +51,124 @@ def get_lane_head(model):
 
 
 class LaneRobotMetrics:
-    """Minimal metrics container expected by the Ultralytics trainer."""
+    """Lane metrics with location quality separated from existence failures."""
 
     def __init__(self):
         self.keys = [
-            "metrics/lane_mae",
-            "metrics/lane_mae_px",
+            "metrics/lane_matched_mae",
+            "metrics/lane_matched_mae_px",
             "metrics/lane_acc_valid_tol1",
             "metrics/lane_acc_valid_tol3",
             "metrics/lane_acc_valid_tol5",
+            "metrics/lane_miss_rate",
+            "metrics/lane_exist_precision",
+            "metrics/lane_exist_recall",
+            "metrics/lane_exist_f1",
             "metrics/lane_exist_acc",
         ]
-        self.lane_mae = 0.0
-        self.lane_mae_px = 0.0
+        self.speed = None
+        self.save_dir = None
+        self.reset()
+
+    def reset(self):
+        """Reset accumulated counts and published values for a new validation run."""
+        self.matched_mae_sum = 0.0
+        self.matched_mae_px_sum = 0.0
+        self.matched_total = 0
+        self.valid_total = 0
+        self.tol1 = 0
+        self.tol3 = 0
+        self.tol5 = 0
+        self.exist_tp = 0
+        self.exist_fp = 0
+        self.exist_fn = 0
+        self.exist_tn = 0
+        self.lane_matched_mae = 0.0
+        self.lane_matched_mae_px = 0.0
         self.lane_acc_valid_tol1 = 0.0
         self.lane_acc_valid_tol3 = 0.0
         self.lane_acc_valid_tol5 = 0.0
+        self.lane_miss_rate = 0.0
+        self.lane_exist_precision = 0.0
+        self.lane_exist_recall = 0.0
+        self.lane_exist_f1 = 0.0
         self.lane_exist_acc = 0.0
         self.fitness = 0.0
-        self.speed = None
-        self.save_dir = None
+
+    @staticmethod
+    def _divide(numerator, denominator):
+        return float(numerator / denominator) if denominator else 0.0
+
+    def update(self, pred_x, target_x, image_width, x_grids):
+        """Accumulate one batch without treating the no-lane sentinel as a coordinate."""
+        valid = target_x >= 0
+        pred_valid = pred_x >= 0
+        matched = valid & pred_valid
+
+        batch_valid = int(valid.sum().item())
+        batch_matched = int(matched.sum().item())
+        self.valid_total += batch_valid
+        self.matched_total += batch_matched
+
+        if batch_matched:
+            matched_err = (pred_x[matched] - target_x[matched]).abs()
+            self.matched_mae_sum += float(matched_err.sum().item())
+            pixel_scale = max(float(image_width) - 1.0, 1.0) / max(int(x_grids) - 1, 1)
+            self.matched_mae_px_sum += float((matched_err * pixel_scale).sum().item())
+            # The denominator remains all valid GT rows, so a missed row fails every location tolerance.
+            self.tol1 += int((matched_err <= 1).sum().item())
+            self.tol3 += int((matched_err <= 3).sum().item())
+            self.tol5 += int((matched_err <= 5).sum().item())
+
+        self.exist_tp += int((valid & pred_valid).sum().item())
+        self.exist_fp += int((~valid & pred_valid).sum().item())
+        self.exist_fn += int((valid & ~pred_valid).sum().item())
+        self.exist_tn += int((~valid & ~pred_valid).sum().item())
+
+    def compute(self):
+        """Publish aggregate metrics and return the trainer-compatible result dictionary."""
+        self.lane_matched_mae = self._divide(self.matched_mae_sum, self.matched_total)
+        self.lane_matched_mae_px = self._divide(self.matched_mae_px_sum, self.matched_total)
+        self.lane_acc_valid_tol1 = self._divide(self.tol1, self.valid_total)
+        self.lane_acc_valid_tol3 = self._divide(self.tol3, self.valid_total)
+        self.lane_acc_valid_tol5 = self._divide(self.tol5, self.valid_total)
+        self.lane_miss_rate = self._divide(self.exist_fn, self.exist_tp + self.exist_fn)
+        self.lane_exist_precision = self._divide(self.exist_tp, self.exist_tp + self.exist_fp)
+        self.lane_exist_recall = self._divide(self.exist_tp, self.exist_tp + self.exist_fn)
+        self.lane_exist_f1 = self._divide(
+            2 * self.lane_exist_precision * self.lane_exist_recall,
+            self.lane_exist_precision + self.lane_exist_recall,
+        )
+        self.lane_exist_acc = self._divide(
+            self.exist_tp + self.exist_tn,
+            self.exist_tp + self.exist_fp + self.exist_fn + self.exist_tn,
+        )
+        self.fitness = float(
+            self.lane_acc_valid_tol3
+            + 0.5 * self.lane_acc_valid_tol5
+            - 0.003 * self.lane_matched_mae
+            + 0.05 * self.lane_exist_f1
+        )
+        return self.results_dict
 
     @property
     def results_dict(self):
         return {
-            "metrics/lane_mae": self.lane_mae,
-            "metrics/lane_mae_px": self.lane_mae_px,
+            "metrics/lane_matched_mae": self.lane_matched_mae,
+            "metrics/lane_matched_mae_px": self.lane_matched_mae_px,
             "metrics/lane_acc_valid_tol1": self.lane_acc_valid_tol1,
             "metrics/lane_acc_valid_tol3": self.lane_acc_valid_tol3,
             "metrics/lane_acc_valid_tol5": self.lane_acc_valid_tol5,
+            "metrics/lane_miss_rate": self.lane_miss_rate,
+            "metrics/lane_exist_precision": self.lane_exist_precision,
+            "metrics/lane_exist_recall": self.lane_exist_recall,
+            "metrics/lane_exist_f1": self.lane_exist_f1,
             "metrics/lane_exist_acc": self.lane_exist_acc,
             "fitness": self.fitness,
         }
 
     def mean_results(self):
-        return [self.lane_mae, self.lane_mae_px, self.lane_acc_valid_tol1, self.lane_acc_valid_tol3, self.lane_acc_valid_tol5, self.lane_exist_acc]
+        return [self.results_dict[k] for k in self.keys]
 
 
 class LaneRobotValidator(BaseValidator):
@@ -126,14 +209,7 @@ class LaneRobotValidator(BaseValidator):
         self.row_anchors = int(head.row_anchors)
         self.num_lanes = int(head.num_lanes)
         self.no_lane_idx = self.x_grids
-        self.mae_sum = 0.0
-        self.mae_px_sum = 0.0
-        self.valid_total = 0
-        self.tol1 = 0
-        self.tol3 = 0
-        self.tol5 = 0
-        self.exist_correct = 0
-        self.exist_total = 0
+        self.metrics.reset()
 
     def _split_preds(self, preds):
         if isinstance(preds, dict):
@@ -156,41 +232,10 @@ class LaneRobotValidator(BaseValidator):
         if target_x is None:
             target_x = batch["lane"].float()
             target_x = torch.where(batch["lane"] == self.no_lane_idx, torch.full_like(target_x, -1.0), target_x)
-        valid = target_x >= 0
-        pred_valid = pred_x >= 0
-        matched = valid & pred_valid
-
-        if valid.any():
-            err = (pred_x[valid] - target_x[valid]).abs()
-            self.mae_sum += float(err.sum().item())
-            img_w = float(batch["img"].shape[-1])
-            self.mae_px_sum += float((err * (img_w / max(self.x_grids, 1))).sum().item())
-            self.valid_total += int(valid.sum().item())
-            if matched.any():
-                matched_err = (pred_x[matched] - target_x[matched]).abs()
-                self.tol1 += int((matched_err <= 1).sum().item())
-                self.tol3 += int((matched_err <= 3).sum().item())
-                self.tol5 += int((matched_err <= 5).sum().item())
-
-        self.exist_correct += int((pred_valid == valid).sum().item())
-        self.exist_total += int(valid.numel())
+        self.metrics.update(pred_x, target_x, image_width=batch["img"].shape[-1], x_grids=self.x_grids)
 
     def get_stats(self):
-        valid_total = max(self.valid_total, 1)
-        mae = self.mae_sum / valid_total
-        mae_px = self.mae_px_sum / valid_total
-        tol1 = self.tol1 / valid_total
-        tol3 = self.tol3 / valid_total
-        tol5 = self.tol5 / valid_total
-        exist_acc = self.exist_correct / max(self.exist_total, 1)
-        self.metrics.lane_mae = float(mae)
-        self.metrics.lane_mae_px = float(mae_px)
-        self.metrics.lane_acc_valid_tol1 = float(tol1)
-        self.metrics.lane_acc_valid_tol3 = float(tol3)
-        self.metrics.lane_acc_valid_tol5 = float(tol5)
-        self.metrics.lane_exist_acc = float(exist_acc)
-        self.metrics.fitness = float(tol3 + 0.5 * tol5 - 0.003 * mae + 0.05 * exist_acc)
-        return self.metrics.results_dict
+        return self.metrics.compute()
 
     def finalize_metrics(self):
         self.metrics.speed = self.speed
@@ -199,16 +244,31 @@ class LaneRobotValidator(BaseValidator):
     def print_results(self):
         stats = self.get_stats()
         LOGGER.info(
-            f"Lane MAE={stats['metrics/lane_mae']:.3f}, "
-            f"MAE_px={stats['metrics/lane_mae_px']:.2f}, "
+            f"Lane matched_MAE={stats['metrics/lane_matched_mae']:.3f}, "
+            f"matched_MAE_px={stats['metrics/lane_matched_mae_px']:.2f}, "
             f"Acc@1={stats['metrics/lane_acc_valid_tol1']:.4f}, "
             f"Acc@3={stats['metrics/lane_acc_valid_tol3']:.4f}, "
             f"Acc@5={stats['metrics/lane_acc_valid_tol5']:.4f}, "
-            f"Exist={stats['metrics/lane_exist_acc']:.4f}"
+            f"Miss={stats['metrics/lane_miss_rate']:.4f}, "
+            f"Exist(P/R/F1)={stats['metrics/lane_exist_precision']:.4f}/"
+            f"{stats['metrics/lane_exist_recall']:.4f}/{stats['metrics/lane_exist_f1']:.4f}, "
+            f"ExistAcc={stats['metrics/lane_exist_acc']:.4f}"
         )
 
     def get_desc(self):
-        return ("%22s" + "%11s" * 6) % ("lane", "mae", "mae_px", "acc@1", "acc@3", "acc@5", "exist")
+        return ("%22s" + "%11s" * 10) % (
+            "lane",
+            "match_mae",
+            "mae_px",
+            "acc@1",
+            "acc@3",
+            "acc@5",
+            "miss",
+            "exist_p",
+            "exist_r",
+            "exist_f1",
+            "exist_acc",
+        )
 
     @property
     def metric_keys(self):

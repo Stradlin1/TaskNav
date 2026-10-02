@@ -109,6 +109,7 @@ lane_x_grids: 160 # (int) number of x-grid classes before adding the no-lane cla
 lane_row_anchors: 56 # (int) number of y row anchors
 lane_num_lanes: 4 # (int) number of lane instances/channels in the label and output tensor
 lane_task_weights: [1.0, 1.0, 1.0, 1.0] # (list[float]) normalized fixed-task loss weights
+lane_strict_labels: True # (bool) require the exact 56-row bottom-to-top manual annotation protocol
 lane_y_start: 1.0 # (float) normalized y of row 0 (image bottom) for labels without y values
 lane_y_end: 0.3333333333 # (float) normalized y of row 55 (top edge of the lower 2/3)
 lane_reduce_channels: 8 # (int) Conv1x1 output channels in the exact YOLOP model.34-style lane head

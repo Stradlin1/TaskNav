@@ -11,6 +11,7 @@ val: images/valid
 # Use the manually corrected labels instead of the default images/... -> labels/... convention.
 train_labels: labels_corrected/train
 val_labels: labels_corrected/valid
+strict_labels: true
 
 x_grids: 160
 row_anchors: 56

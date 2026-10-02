@@ -9,6 +9,8 @@ import torch
 from PIL import Image, ImageOps
 from torch.utils.data import Dataset
 
+from ultralytics.models.yolo.lane.protocol import manual_y_anchors, parse_manual_label, validate_manual_geometry
+
 IMG_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
@@ -43,6 +45,9 @@ class LaneRobotDataset(Dataset):
         self.num_lanes = int(data.get("num_lanes", data.get("lane_num_lanes", getattr(args, "lane_num_lanes", 2))))
         self.y_start = float(data.get("y_start", data.get("lane_y_start", getattr(args, "lane_y_start", 0.67))))
         self.y_end = float(data.get("y_end", data.get("lane_y_end", getattr(args, "lane_y_end", 1.0))))
+        self.strict_labels = bool(data.get("strict_labels", getattr(args, "lane_strict_labels", False)))
+        if self.strict_labels:
+            validate_manual_geometry(self.row_anchors, self.y_start, self.y_end)
         self.imgsz = _imgsz_to_hw(getattr(args, "imgsz", data.get("imgsz", [256, 320])))
         self.label_dir = data.get(f"{mode}_labels") or data.get("labels") or None
         if self.label_dir:
@@ -66,7 +71,7 @@ class LaneRobotDataset(Dataset):
     def _label_path(self, image_path: Path):
         if self.label_dir is not None:
             base = self.label_dir / image_path.with_suffix(".txt").name
-            if base.exists():
+            if self.strict_labels or base.exists():
                 return base
             return self.label_dir / image_path.with_suffix(".npy").name
         parts = list(image_path.parts)
@@ -74,7 +79,7 @@ class LaneRobotDataset(Dataset):
             idx = len(parts) - 1 - parts[::-1].index("images")
             parts[idx] = "labels"
             p = Path(*parts).with_suffix(".txt")
-            if p.exists():
+            if self.strict_labels or p.exists():
                 return p
             return p.with_suffix(".npy")
         p = image_path.with_suffix(".txt")
@@ -85,6 +90,20 @@ class LaneRobotDataset(Dataset):
         lane_x = np.full((self.row_anchors, self.num_lanes), -1.0, dtype=np.float32)
         row_y = np.linspace(self.y_start, self.y_end, self.row_anchors, dtype=np.float32)
         if not label_path.exists():
+            if self.strict_labels:
+                raise FileNotFoundError(f"Missing manual lane label for training image: {label_path}")
+            return lane, lane_x, row_y
+        if self.strict_labels:
+            if label_path.suffix.lower() != ".txt":
+                raise ValueError(f"Strict manual lane protocol requires a .txt label, got {label_path}")
+            records = parse_manual_label(label_path.read_text(encoding="utf-8-sig"), label_path, self.num_lanes)
+            row_y = manual_y_anchors(dtype=np.float32)
+            for lane_id, xs in records:
+                valid = xs >= 0.0
+                lane_x[valid, lane_id] = np.clip(xs[valid] * (self.x_grids - 1), 0, self.x_grids - 1)
+                lane[valid, lane_id] = np.clip(
+                    np.rint(lane_x[valid, lane_id]), 0, self.x_grids - 1
+                ).astype(np.int64)
             return lane, lane_x, row_y
         if label_path.suffix.lower() == ".npy":
             arr = np.load(label_path)
