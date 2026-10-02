@@ -1,35 +1,40 @@
 # TaskNav 目标设计文档
 
-> 状态：设计目标，尚未开始 TaskNav 功能改造  
-> 基线：`TaskNav/main` 初始提交完整复制自 `yolo26_lane_robotv2_ufld:lmm` 当前代码快照  
-> 原则：尽可能复用 LaneRobotV2Independent，不新增独立的 Completion Module，不重做 Backbone / Fusion / Row-Anchor 主体。
-
----
+> 更新日期：2026-10-02  
+> 当前状态：LaneRobot 四任务 baseline 正确性加固阶段；TaskNav Evidence 功能尚未正式实现。  
+> 当前代码基线：main@cfcfcd5f33695a7ab7180e71ceb0a72144a51556  
+> 原则：先得到可复现、可验证、可导出的可信 baseline，再逐步加入 TaskNav 功能，避免同时修改数据、Head、Loss 与部署链路。
 
 ## 1. 项目目标
 
-TaskNav 面向移动机器人在真实赛道中遇到的 **断线、遮挡、稀疏锥桶、颜色边界以及不同视觉载体混合** 场景。
+TaskNav 面向移动机器人在真实赛道中的：
 
-目标不是识别“白线 / 黄线 / 锥桶分别是什么”，而是直接恢复对机器人控制有意义的连续导航结构：
+- 断线；
+- 遮挡；
+- 稀疏锥桶；
+- 颜色边界；
+- 不同视觉载体混合。
 
-- `reference_guide`：参考引导结构；
-- `left_boundary`：左侧不可越界边界；
-- `right_boundary`：右侧不可越界边界。
+目标不是单纯识别“白线 / 黄线 / 锥桶是什么”，而是恢复对机器人控制有意义的导航结构：
+
+~~~text
+reference_guide
+left_boundary
+right_boundary
+~~~
 
 核心问题：
 
-> 当局部视觉证据缺失时，模型仍需要知道导航结构在哪里；同时还必须知道该位置是“直接观察到的”，还是“在缺失 / 遮挡条件下恢复得到的”，避免把障碍物本身错误学习成导航线特征。
+> 看不见，不等于导航结构不存在。
 
-因此 TaskNav 需要同时学习两类信息：
+因此 TaskNav V1 最终希望同时学习：
 
-1. **Geometry：导航结构在哪里。**
-2. **Evidence：该结构当前位置是否存在直接视觉证据。**
+1. Geometry：导航结构在哪里；
+2. Evidence：当前位置是否存在直接视觉证据。
 
----
+## 2. 当前 baseline 已经实现的内容
 
-## 2. 当前 LaneRobot 基线
-
-当前仓库初始代码来自 LMM 分支，主要结构为：
+当前结构：
 
 ~~~text
 RGB
@@ -39,13 +44,13 @@ YOLO Backbone
 P4 / P5 Fusion
  ↓
 LaneRobotV2Independent
- ├── task branch 0
- ├── task branch 1
- ├── task branch 2
- └── task branch 3
+ ├── task 0
+ ├── task 1
+ ├── task 2
+ └── task 3
 ~~~
 
-当前协议：
+当前默认协议：
 
 ~~~text
 imgsz       = 640
@@ -61,47 +66,210 @@ cls    [B, 161, 56, 4]
 offset [B,   1, 56, 4]
 ~~~
 
-每个任务分支内部：
+当前 V2 使用：
 
 ~~~text
-input feature
-  ↓
-Conv1x1
-  ↓
-AdaptiveAvgPool2d
-  ↓
-Flatten
-  ↓
-Linear -> 512
-  ↓
-ReLU
-  ├── cls_fc2
-  └── offset_fc
+nearest-grid classification
++
+signed sub-grid offset
 ~~~
 
-TaskNav 将继续使用这套结构作为工程基础。
+当前解码：
 
----
+~~~text
+pred_x = argmax(cls) + offset
+~~~
 
-## 3. TaskNav 最终网络目标
+当前 manual 标签、Validator 和 ONNX 导出已完成一轮 baseline 加固。
 
-### 3.1 不做的事情
+## 3. 当前 manual Geometry 协议
 
-TaskNav V1 暂时不引入：
+当前 baseline 严格协议：
+
+~~~text
+lane_id x0 y0 x1 y1 ... x55 y55
+~~~
+
+Row Anchor：
+
+~~~text
+row 0  -> y=1.0
+row 55 -> y=0.3333333333
+order  -> bottom-to-top
+~~~
+
+公式：
+
+~~~text
+y(row) = 1.0 - row / 55 * (2/3)
+~~~
+
+当前 x 定义：
+
+~~~text
+x in [0,1] : 该 Row 存在点
+x = -1     : 当前 Row 无点
+~~~
+
+当前 strict parser 不接受 x=-2。
+
+因此本文后续提出的 TaskNav ignore 值 -2 属于“未来协议扩展”，在真正实现 TaskNav Dataset 前不能直接写入当前 baseline 标签，否则 strict parser 会拒绝。
+
+当前 strict 校验已经覆盖：
+
+- 56 对坐标；
+- y 顺序与固定值；
+- x=-1 / [0,1]；
+- task_id；
+- duplicate task；
+- NaN / Inf；
+- 缺失 txt。
+
+## 4. 当前 Validator 已实现
+
+当前 baseline 已有：
+
+### Geometry / localization
+
+~~~text
+matched MAE
+matched MAE px
+Acc@1
+Acc@3
+Acc@5
+~~~
+
+### Structure existence
+
+~~~text
+Miss Rate
+Precision
+Recall
+F1
+Accuracy
+~~~
+
+matched MAE 只统计 GT 与 prediction 都存在的位置，不再将 pred_x=-1 当作普通坐标。
+
+当前 tolerance accuracy 的分母仍是全部 valid GT，因此漏检会失败。
+
+当前 fitness：
+
+~~~text
+Acc@3
++ 0.5 * Acc@5
+- 0.003 * matched_MAE
++ 0.05 * Exist_F1
+~~~
+
+TaskNav 后续仍需要在 Evidence 标签引入后扩展 Visible / Missing 指标。
+
+## 5. 当前 ONNX baseline 已实现
+
+当前 export_onnx.py：
+
+- 支持 CLI 参数；
+- 自动读取 x_grids / row_anchors / num_lanes；
+- 校验模型实际输出 shape；
+- 默认导出单文件 ONNX；
+- 可选 external data；
+- 使用 onnx.checker；
+- 默认执行 ONNX Runtime parity；
+- 比较 PyTorch / ORT 数值。
+
+当前输出：
+
+~~~text
+cls_logits
+offset
+~~~
+
+TaskNav Evidence Head 尚未实现，因此当前不是三输出。
+
+## 6. Baseline 仍需处理的事项
+
+在 TaskNav 功能开发前，仍建议先完成：
+
+### 6.1 清理 Row Anchor legacy fallback
+
+部分核心 Lane 代码仍将：
+
+~~~text
+0.67 -> 1.0
+~~~
+
+保留为最后 fallback。
+
+正式协议应全部统一成：
+
+~~~text
+1.0 -> 0.3333333333
+~~~
+
+标准训练当前已有显式配置和 strict protocol 保护，因此该问题不影响当前标准入口，但仍属于应清理的技术债。
+
+### 6.2 处理 legacy lane-robot.yaml
+
+当前：
+
+~~~text
+ultralytics/cfg/datasets/lane-robot.yaml
+~~~
+
+仍是旧单任务、旧绝对路径和旧 Row Anchor 配置。
+
+当前四任务 baseline 使用：
+
+~~~text
+lane-robot-4tasks.yaml
+~~~
+
+后续需要明确 legacy 文件是删除、重定向还是更新，避免通用 task=lane 入口误用旧配置。
+
+### 6.3 本机运行新增测试
+
+当前已有：
+
+~~~text
+tests/test_tasknav_lane_protocol.py
+tests/test_lane_validator_metrics.py
+~~~
+
+仓库暂无 GitHub Actions workflow，不能把“测试已提交”写成“CI 已通过”。
+
+### 6.4 smoke run + 从头正式训练
+
+旧规则下的 checkpoint 不用于判断最新 baseline 精度。
+
+建议：
+
+~~~text
+1~3 epoch smoke
+  ↓
+确认数据 / loss / val / plot / checkpoint / ONNX
+  ↓
+从头正式训练
+  ↓
+冻结 baseline
+~~~
+
+## 7. TaskNav V1 不做的事情
+
+V1 暂时不引入：
 
 - 独立 Completion Module；
 - Transformer；
 - GNN；
-- 额外跨 Row 大网络；
 - BEV 网络；
 - 时序网络；
-- RGB + Depth 联合训练。
+- RGB + Depth 联合训练；
+- 大规模跨 Row 新网络。
 
-也不重新设计 YOLO Backbone、P4/P5 Fusion 或 Row-Anchor 表示。
+也不重做当前 YOLO Backbone、P4/P5 Fusion 和 Row-Anchor 主体。
 
-### 3.2 要做的最小网络修改
+## 8. TaskNav V1 最小 Head 修改
 
-在每个独立 LaneRobotV2 分支已有的 512 维共享特征后增加一个很小的 `Evidence Head`：
+在每个 SingleLaneRobotV2Branch 当前 512-d feature 后新增：
 
 ~~~text
                      512-d feature
@@ -114,13 +282,13 @@ TaskNav V1 暂时不引入：
       x / no-lane       offset       direct evidence?
 ~~~
 
-单分支新增：
+目标：
 
 ~~~text
 evidence_fc = Linear(512, 56)
 ~~~
 
-TaskNav 目标输出采用动态任务维度 N：
+TaskNav 目标输出：
 
 ~~~text
 cls      [B, 161, 56, N]
@@ -128,31 +296,53 @@ offset   [B,   1, 56, N]
 evidence [B,   1, 56, N]
 ~~~
 
-默认配置保持 `N = 4`，因此默认输出仍为：
+默认 N=4。
+
+Evidence 输出 logits，训练用 BCEWithLogitsLoss，推理后 sigmoid。
+
+## 9. 动态 N 目标
+
+当前 baseline 尚未实现动态 N。
+
+当前任务数同时存在于：
 
 ~~~text
-cls      [B, 161, 56, 4]
-offset   [B,   1, 56, 4]
-evidence [B,   1, 56, 4]
+default.yaml
+lane-robot-4tasks.yaml
+yolo26*-lane-independent.yaml
 ~~~
 
-N 不在模型源码中写死，后续目标是仅通过 `default.yaml` 修改 `lane_num_lanes` 即可切换任意 N 类导航线任务。
+当前均为 4，因此 baseline 一致。
 
-其中：
+TaskNav 的目标是：
 
-- `cls + offset` 回答“导航结构在哪里”；
-- `no-lane` 回答“导航结构是否存在”；
-- `evidence` 回答“当前位置是否存在直接视觉证据”。
+~~~text
+default.yaml / runtime args
+        ↓
+lane_num_lanes = N
+        ↓
+Model
+Dataset
+Loss
+Validator
+Predictor
+Plotting
+Export
+全部使用同一个 N
+~~~
 
-Evidence Head 输出 logits，训练时使用 `BCEWithLogitsLoss`，推理时再做 sigmoid。
+目标要求：
 
----
+1. 默认 N=4；
+2. 只改 default.yaml 即可切换 N；
+3. data YAML 不再作为任务数独立真值源；
+4. model YAML 的 num_lanes 只作为兼容默认值；
+5. Head 自动创建 N 个 branch；
+6. task weights / task names 长度与 N 校验；
+7. checkpoint Head 维度不匹配时明确报错；
+8. ONNX 输出最后一维自动为 N。
 
-## 4. 保留 4 个默认任务槽位，并支持任意 N 类动态切换
-
-当前 LMM 是 4 个独立 task。TaskNav **不把 4 个任务缩减为 3 个**，默认继续保留 4 个独立分支。
-
-默认功能定义建议为：
+默认功能名称计划：
 
 ~~~text
 task 0 -> reference_guide
@@ -161,123 +351,80 @@ task 2 -> right_boundary
 task 3 -> reserve_3
 ~~~
 
-其中 task 3 作为备用槽位，暂时没有正式导航语义时可以保持空任务 / no-lane；后续如果项目增加新的导航结构类型，可直接赋予新的语义并重新训练，而不需要重新改网络结构。
+## 10. TaskNav 数据语义
 
-更重要的长期目标不是“固定四类”，而是让 `LaneRobotV2Independent` 成为 **动态 N 任务模型**：
+TaskNav 必须区分四种情况。
 
-~~~text
-N = lane_num_lanes
-~~~
-
-模型根据 N 自动创建：
-
-~~~text
-task branch 0
-task branch 1
-...
-task branch N-1
-~~~
-
-因此：
-
-- 默认仍使用 `N = 4`；
-- 需要 3 类时，可在 `default.yaml` 中改为 `lane_num_lanes: 3`；
-- 需要 5 类、6 类或更多任务时，同样只修改配置；
-- Head、Dataset、Loss、Validator、Predictor、ONNX 导出都必须从运行时 N 自动推导形状，禁止继续写死 4；
-- 白线、色块边界、锥桶等视觉载体仍按“导航功能”归入对应 task，而不是按物体类型建立类别。
-
-最终目标是：
-
-> **修改 `default.yaml` 就能切换 N 类导航线任务，不需要再改 Python 源码，也不需要手工修改模型 YAML 或数据 YAML 中的固定任务数。**
-
----
-
-## 5. 最重要的数据定义
-
-TaskNav 必须把下面三种情况严格区分。
-
-### A. 结构存在，并且直接可见
+### A. Geometry 存在且直接可见
 
 ~~~text
 geometry x = 有效位置
 evidence   = 1
 ~~~
 
-例如完整白线、清晰颜色边界、锥桶直接提供边界证据的位置。
-
-### B. 结构存在，但没有直接视觉证据
+### B. Geometry 存在但没有直接视觉证据
 
 ~~~text
 geometry x = 有效位置
 evidence   = 0
 ~~~
 
+这是 TaskNav 最核心的区域。
+
 例如：
 
-- 白线被障碍物遮挡；
-- 白线中间断开；
+- 白线被遮挡；
+- 白线断开；
 - 两个稀疏锥桶之间；
-- 局部视觉载体消失，但前后关系足以确定导航结构。
+- 局部视觉载体消失，但整体几何仍可可靠确定。
 
-这是 TaskNav 最核心的训练区域。
+### C. Geometry 真正不存在
 
-### C. 导航结构真的不存在
+未来 TaskNav Geometry 协议计划：
 
 ~~~text
 geometry x = -1
 evidence   = -1
 ~~~
 
-此时继续使用 LaneRobot 的 `no-lane` 类进行训练。
+### D. 人工也无法可靠确定
 
-### D. 人工也无法可靠确定的区域
-
-建议新增明确的 ignore 状态：
+未来计划增加 ignore：
 
 ~~~text
 geometry x = -2
 evidence   = -2
 ~~~
 
-这种位置不参与位置、存在性或 Evidence Loss。
+注意：当前 baseline strict manual protocol 仍只接受 x=-1 或 [0,1]。实现 ignore 前必须先升级 protocol.py / Dataset / tests，不能提前混用。
 
-目的：避免在大面积遮挡、结构走向本身不确定时人为编造 GT。
+## 11. Geometry 与 Evidence 标签设计
 
----
+为尽量保持现有 Geometry 链路稳定，计划分开保存。
 
-## 6. 标签文件设计
+### Geometry
 
-为了尽量不破坏当前 LaneRobot 标签链路，Geometry 与 Evidence 分开保存。
-
-### 6.1 Geometry 标签
-
-继续使用：
+继续：
 
 ~~~text
 labels/train/000123.txt
 ~~~
 
-格式继续保持：
+未来 TaskNav 语义：
 
 ~~~text
-task_id x1 y1 x2 y2 ... x56 y56
-~~~
-
-但语义调整为：
-
-~~~text
-x >= 0 : 导航结构存在，并给出完整几何 GT
-x = -1 : 导航结构不存在
-x = -2 : ignore，不参与训练
+x >= 0 : Geometry 存在
+x = -1 : Geometry 不存在
+x = -2 : ignore
 ~~~
 
 关键变化：
 
-> “看不见”不再自动写成 -1。
+> 视觉上暂时看不见，不再自动等于 x=-1。
 
-如果导航结构仍然存在，即使被遮挡，也需要继续给出正确的连续 `x_gt`。
+只要结构仍存在且人工可以可靠确定，就继续提供完整 x_gt。
 
-### 6.2 Evidence 标签
+### Evidence
 
 新增：
 
@@ -285,37 +432,22 @@ x = -2 : ignore，不参与训练
 evidence/train/000123.txt
 ~~~
 
-格式：
+计划格式：
 
 ~~~text
-task_id e1 e2 e3 ... e56
+task_id e0 e1 ... e55
 ~~~
 
-取值：
+计划值：
 
 ~~~text
- 1 : 当前 Row 有直接视觉证据
- 0 : 导航结构存在，但当前 Row 没有直接视觉证据
--1 : 导航结构不存在，Evidence 不适用
--2 : ignore / 无法可靠标注
+ 1 : 直接视觉证据存在
+ 0 : Geometry 存在，但直接证据缺失
+-1 : Geometry 不存在，Evidence 不适用
+-2 : ignore
 ~~~
 
-示例：
-
-~~~text
-Geometry:
-right_boundary:
-40 42 44 46 48 50 52 54
-
-Evidence:
-1  1  1  0  0  0  1  1
-~~~
-
-表示中间三个点的导航结构仍然存在，但被遮挡或缺失。
-
----
-
-## 7. Dataset 需要修改的内容
+## 12. Dataset 目标修改
 
 目标文件：
 
@@ -323,17 +455,16 @@ Evidence:
 ultralytics/models/yolo/lane/dataset.py
 ~~~
 
-需要增加：
+未来增加：
 
-1. 读取对应 `evidence/*.txt`；
-2. 将 Evidence 转成 `[56, num_lanes]`；
-3. 区分 `x=-1` 与 `x=-2`；
-4. 输出 `lane_ignore` 或等价 mask；
-5. batch 中新增 `lane_evidence`；
-6. collate 时同步堆叠 Evidence；
-7. 保证 Geometry 与 Evidence 在所有几何增强下同步变化。
+1. Evidence 文件读取；
+2. lane_evidence [56,N]；
+3. x=-1 / x=-2 区分；
+4. lane_ignore；
+5. Geometry 与 Evidence 同步增强；
+6. 配置与任务维度动态化。
 
-目标 batch 至少包含：
+目标 batch：
 
 ~~~text
 img
@@ -344,70 +475,9 @@ lane_evidence
 lane_ignore
 ~~~
 
----
+## 13. Loss 目标修改
 
-## 8. Head 需要修改的内容
-
-目标文件：
-
-~~~text
-ultralytics/nn/modules/head.py
-~~~
-
-主要修改：
-
-### SingleLaneRobotV2Branch
-
-当前：
-
-~~~text
-cls_fc2
-offset_fc
-~~~
-
-增加：
-
-~~~text
-evidence_fc
-~~~
-
-forward 从：
-
-~~~text
-return cls, offset
-~~~
-
-改为：
-
-~~~text
-return cls, offset, evidence
-~~~
-
-### LaneRobotV2Independent
-
-对各任务的 Evidence 输出进行 stack。
-
-训练 / PyTorch 输出目标：
-
-~~~python
-{
-    "cls": cls,
-    "offset": offset,
-    "evidence": evidence,
-}
-~~~
-
----
-
-## 9. Loss 需要修改的内容
-
-目标文件：
-
-~~~text
-ultralytics/utils/loss.py
-~~~
-
-当前 LaneRobot Loss 保留：
+当前已有：
 
 ~~~text
 lane_ce
@@ -418,112 +488,56 @@ lane_curv
 lane_offset
 ~~~
 
-新增：
+TaskNav 增加：
 
 ~~~text
 lane_evidence
 ~~~
 
-总损失：
+总目标：
 
 ~~~text
-L_total =
-L_lane_original
-+
-lambda_evidence * L_evidence
+L_total = L_lane_baseline + lambda_evidence * L_evidence
 ~~~
 
-第一版 Evidence Loss 使用：
+Evidence 第一版：
 
 ~~~text
 BCEWithLogitsLoss
 ~~~
 
-### Loss Mask 规则
+Mask 规则：
 
-#### Evidence = 1
+- evidence=1：Geometry 正常监督，Evidence target=1；
+- evidence=0：Geometry 仍正常监督，Evidence target=0；
+- geometry=-1：训练 no-lane，不计算位置 / offset / Evidence；
+- geometry=-2：TaskNav 相关 loss 全部 ignore。
 
-- 位置监督：计算；
-- offset：计算；
-- cls：计算；
-- evidence：目标 1。
+## 14. Navigation Cue Dropout
 
-#### Evidence = 0
+目标：主动生成“直接证据缺失，但 Geometry GT 保持不变”的样本。
 
-- 位置监督：仍然计算；
-- offset：仍然计算；
-- cls：仍然计算；
-- evidence：目标 0。
+可以模拟：
 
-这是 TaskNav 的核心：
-
-> 虽然这里没有直接视觉证据，但仍然要求模型恢复正确的导航几何。
-
-#### Geometry = -1
-
-- 训练 `no-lane`；
-- 不计算位置 / offset；
-- Evidence Loss 不计算。
-
-#### Geometry = -2
-
-- 所有 TaskNav 相关 Loss 均 ignore。
-
----
-
-## 10. Navigation Cue Dropout
-
-在 Dataset / Augmentation 中新增专门的数据增强。
-
-目的：
-
-> 主动制造“视觉证据缺失，但导航结构 GT 不变”的训练样本。
-
-可模拟：
-
-- 连续白线局部擦除；
+- 连续线局部擦除；
 - 颜色边界局部弱化；
 - 随机移除部分锥桶；
-- 随机遮挡；
+- 局部遮挡；
 - 局部模糊；
-- 使用附近地面纹理覆盖导航线索。
+- 地面纹理覆盖局部 cue。
 
-Cue Dropout 发生后：
-
-~~~text
-geometry GT  -> 不变
-evidence     -> 对应区域置 0
-~~~
-
-### 防止 shortcut learning
-
-不能永远使用一种黑色矩形遮挡。
-
-遮挡形式应多样化，并且障碍物 / 遮挡物也必须出现在“没有导航结构”的区域中。
-
-目标是避免模型学习：
+发生后：
 
 ~~~text
-某种障碍物外观
-  ->
-这里一定有导航线
+Geometry GT -> 不变
+Evidence    -> 对应位置变 0
 ~~~
 
-而应迫使模型依赖整体导航关系。
+需要多种遮挡形式，避免模型只学习固定遮挡外观。
 
----
+## 15. TaskNav Validator 目标
 
-## 11. Validator 与核心指标
-
-目标文件：
-
-~~~text
-ultralytics/models/yolo/lane/val.py
-~~~
-
-TaskNav 不再只报告一个总体误差。
-
-至少新增：
+在当前 baseline Validator 基础上继续增加：
 
 ### Geometry
 
@@ -531,35 +545,36 @@ TaskNav 不再只报告一个总体误差。
 Overall MAE
 Visible MAE
 Missing MAE
-Accuracy@5px
-Accuracy@10px
+Visible Acc
+Missing Acc
 ~~~
 
-其中：
+定义：
 
 ~~~text
-Visible Region = evidence == 1
-Missing Region = evidence == 0
+Visible = Geometry存在 AND Evidence=1
+Missing = Geometry存在 AND Evidence=0
 ~~~
 
-`Missing MAE` 是 TaskNav 的核心指标。
+Missing Region 是核心指标。
 
 ### Structure existence
 
-继续评估：
+继续保留当前：
 
 ~~~text
 Precision
 Recall
 F1
-False Positive Rate
+Miss Rate
+Accuracy
 ~~~
 
-用于判断模型会不会在真正没有导航结构时乱补。
+后续可增加 False Positive Rate / False Completion。
 
 ### Evidence
 
-在结构存在的位置统计：
+在 Geometry 存在位置统计：
 
 ~~~text
 Evidence Accuracy
@@ -568,20 +583,9 @@ Evidence Recall
 Evidence F1
 ~~~
 
----
+## 16. Predictor / 可视化目标
 
-## 12. Predictor / 可视化
-
-目标文件：
-
-~~~text
-ultralytics/models/yolo/lane/predict.py
-ultralytics/models/yolo/lane/plotting.py
-infer.py
-infer_onnx.py
-~~~
-
-推理后一个 Row 应能区分三种结果：
+未来每个 Row 区分：
 
 ### Observed
 
@@ -590,8 +594,6 @@ P_exist 高
 P_evidence 高
 ~~~
 
-含义：导航结构存在，而且有直接视觉证据。
-
 ### Inferred / Completed
 
 ~~~text
@@ -599,217 +601,107 @@ P_exist 高
 P_evidence 低
 ~~~
 
-含义：导航结构存在，但这里是模型恢复出的结构。
-
 ### Absent
 
 ~~~text
 P_exist 低
 ~~~
 
-含义：导航结构不存在。
+调试可视化必须把 Observed 与 Inferred 分开显示。
 
-调试可视化应明确区分 Observed 与 Inferred 点，便于检查模型到底是在“看见”还是“补全”。
+## 17. TaskNav ONNX / RDK X5 目标
 
----
-
-## 13. ONNX / RDK X5 导出协议
-
-目标文件：
+当前 baseline：
 
 ~~~text
-export_onnx.py
-infer_onnx.py
+cls_logits [B,161,56,N]
+offset     [B,1,56,N]
 ~~~
 
-目前 LMM ONNX 输出：
+未来 TaskNav：
 
 ~~~text
-cls_logits
-offset
-~~~
-
-TaskNav V1 目标增加第三个输出，并统一使用动态任务维度 N：
-
-~~~text
-cls_logits      [B, 161, 56, N]
-offset          [B,   1, 56, N]
-evidence_logits [B,   1, 56, N]
-~~~
-
-默认 `N = 4`。ONNX 导出脚本不得写死第四维为 4，必须从实际模型配置读取任务数。
-
-第一版优先保持三个独立输出，不急于合并。
-
-后续再针对 RDK X5 INT8 做：
-
-- 算子兼容检查；
-- BPU / CPU 落点检查；
-- FP32 / ONNX / INT8 一致性；
-- FPS；
-- P50 / P95 latency；
-- Visible / Missing 精度变化。
-
-Evidence Head 很小，不应显著改变实时性。
-
----
-
-## 14. 当前基线必须先修复的问题
-
-LMM 当前代码已经记录一个 Row Anchor 协议不一致：
-
-训练数据配置：
-
-~~~text
-y_start = 0.333
-y_end   = 1.0
-~~~
-
-而当前：
-
-~~~text
-infer.py
-infer_onnx.py
-~~~
-
-存在：
-
-~~~text
-Y_START = 0.67
-Y_END   = 1.0
-~~~
-
-在开始 TaskNav 正式实验之前，必须统一训练、验证、PyTorch 推理、ONNX 推理使用完全一致的 Row Anchor 定义。
-
-该修复属于基线正确性修复，不属于 TaskNav 创新。
-
----
-
-## 15. 配置文件目标：default.yaml 作为任务数量的唯一入口
-
-TaskNav 的配置目标是让 `default.yaml` 成为任务数量与任务名称的主要控制入口。
-
-默认仍保持 4 个任务：
-
-~~~yaml
-lane_num_lanes: 4
-lane_task_names:
-  - reference_guide
-  - left_boundary
-  - right_boundary
-  - reserve_3
-
-lane_task_weights: [1.0, 1.0, 1.0, 1.0]
-~~~
-
-如果以后需要切换成 N 类，只修改 `default.yaml`：
-
-~~~yaml
-lane_num_lanes: N
-lane_task_names: [task_0, task_1, ..., task_N-1]
-lane_task_weights: [w0, w1, ..., wN-1]
+cls_logits      [B,161,56,N]
+offset          [B,1,56,N]
+evidence_logits [B,1,56,N]
 ~~~
 
 要求：
 
-1. `lane_task_names` 长度必须等于 `lane_num_lanes`；
-2. `lane_task_weights` 长度必须等于 `lane_num_lanes`；
-3. Dataset 标签中的 `task_id` 合法范围自动变为 `0 ~ N-1`；
-4. `LaneRobotV2Independent` 自动创建 N 个 `SingleLaneRobotV2Branch`；
-5. Loss 自动遍历 N 个任务；
-6. Validator / Predictor / Plotting 自动遍历 N 个任务；
-7. ONNX / RDK 输出最后一维自动为 N；
-8. 代码中不允许再出现依赖“固定 4 类”的硬编码逻辑。
+- 三输出名称固定；
+- N 从运行时模型读取；
+- PyTorch / ONNX Runtime parity；
+- 后续再做 RDK X5 INT8；
+- 检查算子兼容与 BPU / CPU 落点；
+- 测 FPS、P50、P95；
+- 比较 FP32 / ONNX / INT8 的 Visible / Missing 精度。
 
-### 当前代码需要为此做的配置解耦
+## 18. 推荐开发顺序
 
-当前 LMM 基线中，任务数同时出现在多个位置：
-
-~~~text
-default.yaml
-lane-robot-4tasks.yaml
-yolo26s-lane-independent.yaml
-~~~
-
-而当前 Dataset 还会优先读取 data YAML 中的 `num_lanes`，这会导致只改 `default.yaml` 不能真正切换 N。
-
-TaskNav 后续需要调整配置优先级，使：
+必须按阶段推进：
 
 ~~~text
-default.yaml / runtime args
-        ↓
-成为 lane_num_lanes 的单一运行时真值
-        ↓
-Model / Dataset / Loss / Val / Predict / Export
-全部使用同一个 N
+A. Baseline correctness
+   1. 清理 legacy Row Anchor fallback
+   2. 处理 legacy lane-robot.yaml
+   3. 跑 protocol / validator tests
+   4. smoke run
+   5. ONNX parity
+   6. 从头正式训练并冻结 baseline
+
+B. TaskNav configuration
+   7. 动态 N
+   8. 明确 task names / weights
+
+C. TaskNav data
+   9. 完整 Geometry GT
+  10. ignore mask
+  11. Evidence 标签
+
+D. TaskNav model
+  12. Evidence Head
+  13. Evidence Loss
+  14. Visible / Missing / Evidence metrics
+
+E. Robustness
+  15. Navigation Cue Dropout
+  16. 缺失比例实验
+  17. 异质视觉载体实验
+  18. 防幻觉实验
+
+F. Deployment
+  19. ONNX 三输出
+  20. RDK X5 INT8
+  21. 实车闭环
 ~~~
 
-具体目标：
+## 19. 实验路线
 
-- Model 构建前，用运行时 `lane_num_lanes` 覆盖模型 YAML 中的固定 `num_lanes`；
-- Dataset 优先读取 `args.lane_num_lanes`，不让 data YAML 的旧固定值覆盖运行时配置；
-- data YAML 主要保留路径、Row Anchor 范围等数据描述，不再作为任务数量的独立真值源；
-- 模型 YAML 中的 `num_lanes: 4` 仅可作为默认兼容值，运行时必须允许被 `default.yaml` 覆盖；
-- 所有 shape check 和循环都使用实际 `self.num_lanes` / N；
-- 切换 N 后若加载旧 checkpoint，必须明确提示 Head 维度不匹配，不能静默错误加载。
+### Exp01：最新 LaneRobot baseline
 
-同时在 `default.yaml` 增加 TaskNav 配置：
+使用最新协议、最新 Validator、最新 offset / decode，从头重新训练。
 
-~~~text
-lane_evidence
-tasknav_cue_dropout
-tasknav_cue_dropout_prob
-~~~
+目的：得到可信比较基线。
 
-具体权重与概率通过实验确定，不在目标文档中提前写死。
+### Exp02：动态 N / 功能任务语义
 
----
-
-## 16. 实验路线
-
-### Exp01：LMM 原始 LaneRobot 回归基线
-
-目的：
-
-- 确认初始导入代码可正常训练 / 推理；
-- 固化基线；
-- 修复 Row Anchor 不一致后重新验证。
-
-### Exp02：G / L / R Unified LaneRobot
-
-模型仍是 Independent LaneRobot，不加 Evidence Head，不加 Cue Dropout。
-
-目的：
-
-- 建立 TaskNav 公平基线；
-- 验证功能标签本身的效果。
+不加 Evidence Head，只完成配置解耦和功能 task 定义。
 
 ### Exp03：完整导航结构监督
 
-对遮挡 / 断线 / 稀疏区域继续提供完整 Geometry GT。
-
-目的：
-
-- 验证不修改主体网络时，LaneRobot 是否已经具备隐式结构恢复能力。
+对遮挡 / 断线 / 稀疏区域继续提供可靠 Geometry GT。
 
 ### Exp04：Evidence Head
 
-加入 Evidence 辅助监督。
-
-目的：
-
-- 让模型显式区分 Observed 与 Inferred；
-- 验证是否减少把遮挡物当作导航结构证据的错误。
+显式学习 Observed / Inferred。
 
 ### Exp05：Navigation Cue Dropout
 
-在 Exp04 基础上加入专门缺失增强。
+增强 Missing Region 恢复能力。
 
-目的：
+### Exp06：缺失比例
 
-- 提高缺失 / 遮挡 / 稀疏条件下的恢复能力。
-
-### Exp06：缺失比例实验
+测试：
 
 ~~~text
 0%
@@ -819,29 +711,27 @@ tasknav_cue_dropout_prob
 70%
 ~~~
 
-重点观察 Missing MAE 的退化速度。
+重点看 Missing Region 退化速度。
 
 ### Exp07：异质视觉载体
 
-测试：
+例如：
 
 - 白线 -> 锥桶；
-- 白线 -> 白线 + 锥桶 -> 锥桶；
+- 白线 + 锥桶；
 - 左白线 / 右锥桶；
 - 颜色边界与实体线切换。
 
-### Exp08：防幻觉 / 干扰实验
+### Exp08：防幻觉 / 干扰
 
-测试：
+例如：
 
 - 地砖缝；
 - 阴影；
 - 胶带；
 - 普通物体边缘；
-- 障碍物在线外；
-- 真正不存在导航结构的区域。
-
-重点统计 False Positive / False Completion。
+- 线外障碍物；
+- 真正不存在导航结构。
 
 ### Exp09：RDK X5
 
@@ -855,7 +745,7 @@ RDK X5 INT8
 
 ### Exp10：实车闭环
 
-场景：
+覆盖：
 
 - 完整线；
 - 断线；
@@ -864,80 +754,53 @@ RDK X5 INT8
 - 白线 / 锥桶切换；
 - 左右异质边界。
 
----
+## 20. Depth 的定位
 
-## 17. Depth 的定位
+Depth 暂不进入 TaskNav V1 主视觉网络训练。
 
-Depth 不进入 TaskNav V1 的视觉网络训练。
-
-后续系统层：
+系统层可保持：
 
 ~~~text
-RGB -> TaskNav -> Guide / Left / Right
+RGB   -> TaskNav -> Guide / Left / Right
 Depth -> Temporary Occupancy
 ~~~
 
-只有当临时障碍物与 Guide 冲突时：
+当临时障碍物与 Guide 冲突时：
 
 ~~~text
 Depth occupancy
       ↓
 Guide conflict?
-      ↓ yes
+      ↓
 Local Guide Correction
       ↓
-绕障后恢复原 Guide
+绕障后恢复 Guide
 ~~~
 
-Depth 是安全约束和闭环系统扩展，不是 TaskNav 导航结构感知主模型的一部分。
+Depth 属于后续安全约束与闭环扩展，不属于 TaskNav V1 主模型创新。
 
----
+## 21. TaskNav V1 完成判据
 
-## 18. 推荐代码修改顺序
+至少满足：
 
-1. **先保证当前 LMM baseline 可复现。**
-2. **修复 Row Anchor 训练 / 推理不一致。**
-3. **建立默认 4 槽位、可配置 N 类的 TaskNav 数据协议。**
-4. **修改 Dataset 支持完整 Geometry GT + Evidence 标签 + ignore。**
-5. **建立 Unified LaneRobot baseline。**
-6. **增加 Evidence Head。**
-7. **增加 Evidence Loss。**
-8. **修改 Validator，加入 Visible / Missing / Evidence 指标。**
-9. **增加 Navigation Cue Dropout。**
-10. **修改 Predictor / Plotting。**
-11. **修改 ONNX 导出与推理。**
-12. **完成 RDK X5 量化和实车验证。**
-
-必须按照这个顺序推进，避免同时修改数据、网络、损失和部署链路后无法定位问题。
-
----
-
-## 19. TaskNav V1 完成判据
-
-TaskNav V1 至少满足：
-
-- 默认 4 个任务槽位可以正常训练和预测，其中前三个可用于 G / L / R，第四个保留备用；
-- 仅修改 `default.yaml` 即可切换到任意 N 类任务，模型、Dataset、Loss、Validator、Predictor 与 ONNX 输出自动同步；
-- 被遮挡区域仍输出连续正确的 Geometry；
-- Evidence Head 能区分直接观测点和恢复点；
-- 真正不存在结构时能够输出 no-lane，而不是无条件补线；
-- Missing Region 指标明显优于 Unified LaneRobot baseline；
-- Navigation Cue Dropout 带来可重复的 Missing Region 改善；
-- 完整可见区域性能不能出现明显退化；
-- ONNX 输出与 PyTorch 一致；
+- 最新 baseline 已从头训练并冻结；
+- 默认四任务可以稳定训练和预测；
+- 仅修改 runtime/default 配置即可切换任意 N；
+- 完整 Geometry GT 支持遮挡 / 断线；
+- ignore 机制工作；
+- Evidence Head 能区分 Observed / Inferred；
+- Missing Region 指标相对 baseline 有可重复改善；
+- Cue Dropout 带来稳定收益；
+- 可见区域不能明显退化；
+- 真正不存在结构时不会无条件补线；
+- ONNX 三输出与 PyTorch 一致；
 - RDK X5 INT8 保持可用实时性；
-- 最终实车在断线、遮挡、稀疏锥桶及异质载体场景中完成闭环导航。
+- 实车完成目标场景闭环导航。
 
----
+## 22. 一句话定义
 
-## 20. 一句话定义 TaskNav V1
+> TaskNav V1 = 动态 N 类 LaneRobotV2Independent + 功能化导航任务表示 + 完整 Geometry 监督 + Evidence 辅助监督 + Navigation Cue Dropout。
 
-> **TaskNav V1 = 动态 N 类 LaneRobotV2Independent + 导航功能表示 + 完整导航结构监督 + Evidence 辅助监督 + Navigation Cue Dropout。**
-
-默认使用 4 个任务槽位：`reference_guide / left_boundary / right_boundary / reserve_3`；任务数量 N 由 `default.yaml` 控制。
-
-其中最重要的任务定义是：
+其中最重要的原则仍然是：
 
 > **“看不见”不等于“导航结构不存在”。**
-
-模型不仅要恢复导航结构的位置，还要知道该位置是否具有直接视觉证据。
