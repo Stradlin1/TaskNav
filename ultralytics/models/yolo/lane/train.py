@@ -36,8 +36,8 @@ class LaneRobotTrainer(BaseTrainer):
         data.setdefault("x_grids", int(getattr(self.args, "lane_x_grids", 640)))
         data.setdefault("row_anchors", int(getattr(self.args, "lane_row_anchors", 56)))
         data.setdefault("num_lanes", int(getattr(self.args, "lane_num_lanes", 2)))
-        data.setdefault("y_start", float(getattr(self.args, "lane_y_start", 0.67)))
-        data.setdefault("y_end", float(getattr(self.args, "lane_y_end", 1.0)))
+        data.setdefault("y_start", float(getattr(self.args, "lane_y_start", 1.0)))
+        data.setdefault("y_end", float(getattr(self.args, "lane_y_end", 0.3333333333)))
         data.setdefault("channels", 3)
         data.setdefault("names", {i: f"lane_{i}" for i in range(int(data["num_lanes"]))})
         data.setdefault("nc", int(data["num_lanes"]))
@@ -117,8 +117,8 @@ class LaneRobotTrainer(BaseTrainer):
             row_anchors=int(self.data["row_anchors"]),
             save_path=self.save_dir / f"train_batch{ni}_lane.jpg",
             row_y=batch.get("lane_y"),
-            y_start=float(self.data.get("y_start", 0.67)),
-            y_end=float(self.data.get("y_end", 1.0)),
+            y_start=float(self.data.get("y_start", 1.0)),
+            y_end=float(self.data.get("y_end", 0.3333333333)),
         )
 
     def plot_training_labels(self):
@@ -149,8 +149,8 @@ class LaneRobotTrainer(BaseTrainer):
                     row_anchors=head.row_anchors,
                     save_path=self.save_dir / "lane_final_predictions.jpg",
                     row_y=batch.get("lane_y"),
-                    y_start=float(self.data.get("y_start", 0.67)),
-                    y_end=float(self.data.get("y_end", 1.0)),
+                    y_start=float(self.data.get("y_start", 1.0)),
+                    y_end=float(self.data.get("y_end", 0.3333333333)),
                 )
             except Exception as e:
                 LOGGER.warning(f"Could not save final lane visualization: {e}")

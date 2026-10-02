@@ -2,7 +2,7 @@
 
 > 更新日期：2026-10-02  
 > 当前状态：LaneRobot 四任务 baseline 正确性加固阶段；TaskNav Evidence 功能尚未正式实现。  
-> 当前代码基线：main@cfcfcd5f33695a7ab7180e71ceb0a72144a51556  
+> 当前代码基线：main（2026-10-02，已统一核心 Row Anchor fallback）  
 > 原则：先得到可复现、可验证、可导出的可信 baseline，再逐步加入 TaskNav 功能，避免同时修改数据、Head、Loss 与部署链路。
 
 ## 1. 项目目标
@@ -190,23 +190,15 @@ TaskNav Evidence Head 尚未实现，因此当前不是三输出。
 
 在 TaskNav 功能开发前，仍建议先完成：
 
-### 6.1 清理 Row Anchor legacy fallback
+### 6.1 Row Anchor legacy fallback 已清理
 
-部分核心 Lane 代码仍将：
-
-~~~text
-0.67 -> 1.0
-~~~
-
-保留为最后 fallback。
-
-正式协议应全部统一成：
+核心 Lane 模块的最终 fallback 已统一为正式协议：
 
 ~~~text
 1.0 -> 0.3333333333
 ~~~
 
-标准训练当前已有显式配置和 strict protocol 保护，因此该问题不影响当前标准入口，但仍属于应清理的技术债。
+Dataset、Trainer、Validator 和 Plotting 的默认 Row Anchor 语义现在与 strict manual protocol 一致。
 
 ### 6.2 处理 legacy lane-robot.yaml
 
@@ -642,7 +634,7 @@ evidence_logits [B,1,56,N]
 
 ~~~text
 A. Baseline correctness
-   1. 清理 legacy Row Anchor fallback
+   1. Row Anchor fallback 已统一（保持回归测试）
    2. 处理 legacy lane-robot.yaml
    3. 跑 protocol / validator tests
    4. smoke run

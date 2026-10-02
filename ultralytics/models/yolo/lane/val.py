@@ -285,8 +285,8 @@ class LaneRobotValidator(BaseValidator):
             row_anchors=self.row_anchors,
             save_path=self.save_dir / f"val_batch{ni}_labels.jpg",
             row_y=batch.get("lane_y"),
-            y_start=float(getattr(self.args, "lane_y_start", 0.67)),
-            y_end=float(getattr(self.args, "lane_y_end", 1.0)),
+            y_start=float(getattr(self.args, "lane_y_start", 1.0)),
+            y_end=float(getattr(self.args, "lane_y_end", 0.3333333333)),
         )
 
     def plot_predictions(self, batch, preds, ni):
@@ -309,6 +309,6 @@ class LaneRobotValidator(BaseValidator):
             row_anchors=self.row_anchors,
             save_path=self.save_dir / f"val_batch{ni}_pred.jpg",
             row_y=batch.get("lane_y"),
-            y_start=float(getattr(self.args, "lane_y_start", 0.67)),
-            y_end=float(getattr(self.args, "lane_y_end", 1.0)),
+            y_start=float(getattr(self.args, "lane_y_start", 1.0)),
+            y_end=float(getattr(self.args, "lane_y_end", 0.3333333333)),
         )

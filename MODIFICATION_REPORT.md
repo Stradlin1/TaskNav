@@ -1,7 +1,7 @@
 # TaskNav / Independent LaneRobotV2 修改报告
 
 > 更新日期：2026-10-02  
-> 当前主线代码基线：cfcfcd5f33695a7ab7180e71ceb0a72144a51556  
+> 当前主线代码基线：main（2026-10-02，已统一核心 Row Anchor fallback）  
 > 说明：本文区分“当前代码已实现”“已有历史验证”“仍需本机重新验证”三类状态。
 
 ## 1. 当前基线范围
@@ -217,23 +217,15 @@ pytest tests/test_lane_validator_metrics.py
 
 ## 5. 当前仍存在的代码问题
 
-### 5.1 Row Anchor fallback 仍是旧协议
+### 5.1 Row Anchor fallback 已统一
 
-main 的部分核心函数仍保留：
-
-~~~text
-0.67 -> 1.0
-~~~
-
-作为最后 fallback。
-
-当前标准训练通过 default.yaml、lane-robot-4tasks.yaml 和 strict protocol 使用：
+核心 Lane 模块的最后 fallback 现已统一为：
 
 ~~~text
 1.0 -> 0.3333333333
 ~~~
 
-因此当前标准四任务训练不会因 fallback 学反，但 fallback 仍与正式协议不一致，应统一清理。
+与 default.yaml、lane-robot-4tasks.yaml 和 strict manual protocol 一致。标准配置缺失部分几何参数时，不再回退到历史 0.67 -> 1.0 协议。
 
 ### 5.2 默认 lane-robot.yaml 仍为 legacy
 
@@ -300,7 +292,7 @@ ONNX 两输出 + ORT parity
 ## 7. 当前推荐验证流程
 
 ~~~text
-1. 清理剩余 Row Anchor fallback / legacy data config
+1. 处理 legacy lane-robot.yaml，并确认核心 Row Anchor fallback 已统一
 2. 本机跑 protocol + validator 单元测试
 3. 1~3 epoch smoke run
 4. 检查 loss / shape / metrics / plots / checkpoint

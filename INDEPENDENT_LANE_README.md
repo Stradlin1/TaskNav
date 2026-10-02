@@ -2,7 +2,7 @@
 
 > 更新日期：2026-10-02  
 > 当前主线：main  
-> 本文对应代码基线：cfcfcd5f33695a7ab7180e71ceb0a72144a51556  
+> 本文对应代码基线：main（2026-10-02，已统一核心 Row Anchor fallback）  
 > 当前阶段：先闭环 LaneRobot 四任务基线，再进入 TaskNav Evidence / Completion 方向。
 
 ## 1. 当前模型结构
@@ -418,16 +418,16 @@ pytest tests/test_lane_validator_metrics.py
 
 ## 9. 当前已知未完成事项
 
-### 9.1 核心 Lane 模块仍残留旧 Row Anchor fallback
+### 9.1 核心 Row Anchor fallback 已统一
 
-当前 main 的部分代码最后兜底值仍是：
+核心 Lane 模块的最终 fallback 已统一为正式 manual 协议：
 
 ~~~text
-y_start = 0.67
-y_end   = 1.0
+y_start = 1.0
+y_end   = 0.3333333333
 ~~~
 
-涉及：
+覆盖：
 
 ~~~text
 ultralytics/models/yolo/lane/dataset.py
@@ -436,18 +436,12 @@ ultralytics/models/yolo/lane/val.py
 ultralytics/models/yolo/lane/plotting.py
 ~~~
 
-标准训练路径因为 default.yaml、data YAML 和 strict protocol 都显式使用：
+因此标准配置和最终 fallback 现在都遵循同一语义：
 
 ~~~text
-1.0 -> 0.3333333333
-~~~
-
-所以当前标准四任务训练不会因此学反。
-
-但这些 fallback 与正式 manual 协议不一致，仍应清理为：
-
-~~~text
-1.0 -> 0.3333333333
+row 0  = image bottom
+row 55 = image height 1/3
+order  = bottom-to-top
 ~~~
 
 ### 9.2 lane-robot.yaml 仍是 legacy 单任务配置
