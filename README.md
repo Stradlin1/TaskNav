@@ -7,6 +7,91 @@ TaskNav 是基于 YOLO26 + LaneRobotV2 的单目导航结构感知项目。Row-A
 > 当前模型：共享 Backbone / P4+P5 Fusion + Independent LaneRobotV2 branches  
 > 当前输出协议：`cls [B, X+1, R, N]` + `offset [B, 1, R, N]`
 
+## 可复现训练环境
+
+当前正式训练主线只使用仓库相对路径，不依赖 `/home/xhm`、`/home/baater` 等个人目录。参考训练环境写在仓库根目录的 `environment.yml` 中，固定：
+
+- Python 3.10.20
+- PyTorch 2.8.0 + CUDA 12.8
+- torchvision 0.23.0
+- pytest 9.1.1
+
+推荐环境：Linux x86_64 + NVIDIA GPU。CUDA 12.8 由 PyTorch wheel 提供运行时；宿主机需要兼容的 NVIDIA Driver，但通常不需要额外安装完整 CUDA Toolkit。
+
+### 从零安装
+
+```bash
+git clone https://github.com/Stradlin1/TaskNav.git
+cd TaskNav
+
+conda env create -f environment.yml
+conda activate tasknav
+
+# 安装本仓库以及 pyproject.toml 中声明的训练依赖
+python -m pip install -e .
+```
+
+检查训练环境：
+
+```bash
+python - <<'PY'
+import torch
+
+print("torch:", torch.__version__)
+print("torch cuda:", torch.version.cuda)
+print("cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("gpu:", torch.cuda.get_device_name(0))
+PY
+```
+
+运行单元测试：
+
+```bash
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest tests
+```
+
+### 数据集目录
+
+正式训练配置 `ultralytics/cfg/datasets/lane-robot-4tasks.yaml` 使用仓库相对路径。另一台电脑只要把数据集保持为：
+
+```text
+TaskNav/
+├── datasets/
+│   └── datasets/
+│       ├── images/
+│       │   ├── train/
+│       │   └── valid/
+│       └── labels_corrected/
+│           ├── train/
+│           └── valid/
+├── train.py
+└── ultralytics/
+```
+
+对应配置：
+
+```yaml
+path: datasets/datasets
+train: images/train
+val: images/valid
+train_labels: labels_corrected/train
+val_labels: labels_corrected/valid
+```
+
+因此仓库和数据集都具备时，不需要修改任何个人绝对路径即可运行正式训练。
+
+### 正式训练
+
+```bash
+python train.py --cfg ultralytics/cfg/experiments/lane_core_baseline.yaml
+python train.py --cfg ultralytics/cfg/experiments/lane_full_loss_8x10.yaml
+python train.py --cfg ultralytics/cfg/experiments/lane_full_loss_10x10.yaml
+python train.py --cfg ultralytics/cfg/experiments/lane_full_loss_16x16.yaml
+```
+
+根目录只保留当前训练/导出主线入口。历史统计、旧推理、旧预标注、旧可视化等脚本统一归档到 `tasknav/oldscripts/`，不属于当前 baseline 训练依赖。
+
 ## 两条训练线
 
 比赛模型和大创研究模型分开训练，不使用 task supervision mask 混训。
