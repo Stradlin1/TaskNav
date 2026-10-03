@@ -1,0 +1,11 @@
+name: tasknav
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10.20
+  - pip
+  - pip:
+      - --extra-index-url https://download.pytorch.org/whl/cu128
+      - torch==2.8.0+cu128
+      - torchvision==0.23.0+cu128
+      - pytest==9.1.1
