@@ -1,7 +1,7 @@
 # TaskNav 目标设计文档
 
 > 更新日期：2026-10-03  
-> 当前状态：四任务 Independent LaneRobotV2 baseline 仍处于模型正确性修复阶段。  
+> 当前状态：四任务 Independent LaneRobotV2 六项模型正确性代码修复已完成，正在进入数据训练 smoke 与从头重训阶段。
 > 当前代码基线：main。  
 > 原则：比赛模型与大创研究模型分开训练；当前先修模型本体，再进入 TaskNav 研究增强。
 
@@ -108,11 +108,11 @@ strict parser 当前不接受 -2。后续 Complete Geometry / ignore 扩展时�
 - ONNX 两输出与 ORT parity 检查；
 - protocol / validator 单元测试。
 
-这些工作不代表模型 Loss 已完全正确。当前仍有一轮模型本体修复必须先完成。
+在此基础上，六项模型本体修复也已于 2026-10-03 完成；新的精度结论仍需从头重训获得。
 
-## 5. 当前必须修复的六个模型问题
+## 5. 已完成的六项模型正确性修复
 
-### 5.1 lane_loc 对 cls 几何梯度被 hard argmax 截断
+### 5.1 lane_loc 使用可导训练解码
 
 当前 V2 解码：
 
@@ -120,29 +120,19 @@ strict parser 当前不接受 -2。后续 Complete Geometry / ignore 扩展时�
 pred_x = argmax(cls_logits) + offset
 ~~~
 
-推理这样做是正确的，但训练时如果 lane_loc 也直接依赖这个 hard argmax，则 lane_loc 无法通过 argmax 向 cls logits 传播几何梯度。
-
-目标：
-
-- 推理仍使用 hard argmax + signed offset；
-- CE 仍监督 nearest grid；
-- offset 仍监督 signed residual；
-- lane_loc 训练路径必须使用可导的 soft position；
-- 不允许为了可导而改变最终部署解码协议。
-
-推荐实现：
+推理这样做是正确的并保持不变。训练时 `lane_loc` 已从 hard argmax 分离，改用完整 visible x-grid 上的 softmax 期望：
 
 ~~~text
-soft_x = differentiable local expectation from cls logits
-train_pred_x = soft_x + offset
+soft_x = sum(softmax(cls_logits[0:x_grids]) * grid_index)
+train_pred_x = soft_x + clamp(offset, -0.5, +0.5)
 lane_loc(train_pred_x, target_x)
 ~~~
 
-也允许使用 straight-through estimator，但必须通过单测证明 lane_loc backward 后 cls logits 存在非零梯度。
+CE 仍监督 nearest grid，offset 仍监督 signed residual。单测已证明 lane_loc backward 后 cls x-grid logits 与 offset 都存在非零梯度。
 
-### 5.2 smooth / curvature 不能再把预测往 0 导数压
+### 5.2 smooth / curvature 已改为 GT-relative geometry
 
-当前旧逻辑本质上是：
+旧逻辑本质上是：
 
 ~~~text
 d1_pred -> 0
@@ -151,7 +141,7 @@ d2_pred -> 0
 
 这会鼓励预测更直，可能压制真实弯道、绕障和入口转向。
 
-目标改为：
+当前已改为：
 
 ~~~text
 d1_pred -> d1_gt
@@ -170,9 +160,9 @@ d2_gt   = target_x[:,2:] - 2*target_x[:,1:-1] + target_x[:,:-2]
 
 只在对应连续 GT Row 都 valid 时计算。
 
-### 5.3 增加 Loss 单元测试
+### 5.3 Loss 单元测试
 
-新增测试至少覆盖：
+`tests/test_lane_loss_geometry.py` 已覆盖：
 
 1. lane_loc 单独 backward 时 cls logits 梯度非零；
 2. lane_loc 对 offset 也有有效梯度；
@@ -182,15 +172,9 @@ d2_gt   = target_x[:,2:] - 2*target_x[:,1:-1] + target_x[:,:-2]
 6. nearest-grid + signed-offset target 仍保持现有定义；
 7. Loss finite，无 NaN / Inf。
 
-建议新增：
+### 5.4 CE + Exist + Offset 干净 baseline
 
-~~~text
-tests/test_lane_loss_geometry.py
-~~~
-
-### 5.4 增加 CE + Exist + Offset 干净 baseline
-
-需要一个明确可复现的模型正确性基线：
+已新增 `ultralytics/cfg/experiments/lane_core_baseline.yaml`：
 
 ~~~text
 lane_ce     > 0
@@ -204,17 +188,13 @@ lane_curv   = 0
 
 目的不是作为最终模型，而是隔离 Backbone / Fusion / Head / nearest-grid / signed-offset 是否本身可以稳定学习。
 
-不要手工每次改 default.yaml。增加独立配置文件，例如：
+运行：
 
 ~~~text
-ultralytics/cfg/experiments/lane_core_baseline.yaml
+python train.py --cfg ultralytics/cfg/experiments/lane_core_baseline.yaml
 ~~~
 
-或项目中同等级的明确 experiment config。
-
-必须可以一条命令复现。
-
-### 5.5 对 8x10 AdaptiveAvgPool 做 Head 消融
+### 5.5 8x10 / 10x10 / 16x16 AdaptiveAvgPool 消融
 
 当前 640x640 输入经过 P4/P5 fusion 后仍被每个 branch 压到固定：
 
@@ -224,7 +204,7 @@ ultralytics/cfg/experiments/lane_core_baseline.yaml
 
 这是从早期 256x320 LaneRobot 设计继承的设置，对当前 640 输入是否最优尚未验证。
 
-本轮不要直接删除 8x10，而是增加三套可训练模型配置：
+8x10 控制组保留，并已增加三套可训练模型配置：
 
 ~~~text
 8x10   control
@@ -232,13 +212,13 @@ ultralytics/cfg/experiments/lane_core_baseline.yaml
 16x16
 ~~~
 
-要求：
+实现状态：
 
-- 除 feat_h / feat_w 外保持结构和训练参数一致；
-- 不在同一次实验同时改 hidden_dim、reduce_channels 等参数；
-- 确保对应 FC 输入维度自动正确；
-- 三套都能 forward / backward / export；
-- 最终用同一数据、同一 seed、同一训练预算比较。
+- 三份模型 YAML 除 feat_h / feat_w 外保持一致；
+- `flatten_dim = reduce_channels * feat_h * feat_w` 自动变化；
+- 三套 full-loss 实验配置的数据、seed、epochs、batch、optimizer 与 Loss weights 一致；
+- 三套完整模型 build / forward / backward 已通过；
+- 8x10 历史 checkpoint 的 ONNX 双输出 parity 已通过；10x10 / 16x16 随机初始化完整模型的 export、checker 与 ORT parity 已通过。后两者尚无训练 checkpoint，不能给出训练后精度结论。
 
 主要指标：
 
@@ -255,7 +235,7 @@ ONNX 大小
 
 在实验结果出来前，默认 8x10 不直接宣判错误。
 
-### 5.6 lane_label_smoothing 必须真正生效
+### 5.6 lane_label_smoothing 已生效
 
 当前 default.yaml 有：
 
@@ -263,19 +243,12 @@ ONNX 大小
 lane_label_smoothing: 0.02
 ~~~
 
-但 LaneRobotLoss 没有读取它，属于死参数。
+`LaneRobotLoss` 已读取该参数并校验 `[0,1)`：
 
-本轮选择“实现”，不要仅删除。
-
-要求：
-
-- 在 LaneRobotLoss.__init__ 读取 lane_label_smoothing；
-- 范围校验建议为 [0, 1)；
-- hard-label CE 分支使用该值；
-- soft-label CE 分支也必须有明确语义，不能让参数表面存在但实际仍无效；
-- 最简单可接受方案：对最终 soft target 做 uniform smoothing；
-- no-lane 行仍按 no-lane 分类目标处理，不能被错误当作 visible soft target；
-- 增加测试证明 0.0 和非 0 值产生不同 CE。
+- hard-label CE 使用 `F.cross_entropy(..., label_smoothing=eps)`；
+- visible Gaussian soft target 与仅覆盖 `0..159` 的 uniform visible-grid 分布混合，no-lane target 始终为 0；
+- invalid/no-lane Row 继续走带 label smoothing 的 no-lane CE；
+- 单测确认 `eps=0` 兼容旧 soft target，且 `eps=0.1` 会改变 hard / soft CE。
 
 ## 6. 六项修复后的 Loss 目标
 
@@ -416,16 +389,16 @@ False Completion Rate
 
 ~~~text
 Stage 0 - Model correctness
-  1. 修 lane_loc 可导训练路径
-  2. 修 smooth / curv GT-relative geometry
-  3. 加 Loss tests
-  4. 建 core baseline config
-  5. 建 8x10 / 10x10 / 16x16 pool configs
-  6. 实现 lane_label_smoothing
+  1. 修 lane_loc 可导训练路径（完成）
+  2. 修 smooth / curv GT-relative geometry（完成）
+  3. 加 Loss tests（完成）
+  4. 建 core baseline config（完成）
+  5. 建 8x10 / 10x10 / 16x16 pool configs（完成）
+  6. 实现 lane_label_smoothing（完成）
 
 Stage 1 - Baseline experiments
-  7. pytest
-  8. 1~3 epoch smoke
+  7. 单元测试 / 随机 batch loss smoke / ONNX parity（完成）
+  8. 1 epoch 微型数据训练 smoke（完成）；全量数据 1~3 epoch smoke（待运行）
   9. CE + Exist + Offset core baseline
  10. 完整修正版 Loss baseline
  11. Pool size ablation
@@ -448,9 +421,9 @@ Stage 3 - Deployment
  24. 实车闭环
 ~~~
 
-## 12. 本轮完成判据
+## 12. 当前验证结果
 
-六项模型修复阶段完成至少满足：
+已完成：
 
 - lane_loc backward 后 cls logits 梯度非零；
 - smooth / curv 对完美 GT geometry 近似 0；
@@ -461,11 +434,14 @@ Stage 3 - Deployment
 - 原有 protocol tests 通过；
 - 原有 validator tests 通过；
 - 新增 lane loss tests 通过；
-- 1~3 epoch smoke 无 NaN；
+- 随机合法 batch core/full loss smoke 无 NaN；
+- core / full-loss 8x10 的 1 图 train + 1 图 val、64×64、1 epoch CPU 微型训练通过；
 - PyTorch 输出协议未变化；
 - ONNX 两输出协议未变化；
-- ORT parity 通过。
+- ORT parity 通过；`cls_logits` 最大绝对误差 `4.5776367e-05`，`offset` 最大绝对误差 `3.4198165e-06`。
+
+实际使用 `lane_robot` 环境的 pytest 9.1.1 运行三份指定测试和整个 `tests/`，21 项及 6 个 subtests 全部通过。由于系统 ROS pytest 插件与该环境不兼容，命令设置了 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`。core 与 full-loss 8x10 的 1 epoch CPU 微型训练也已通过；它只使用 1 张训练图、1 张验证图和 64×64 输入，只验证链路。全量数据 1–3 epoch、120 epoch 正式重训和 Pool 精度消融尚未运行。
 
 ## 13. 一句话定义
 
-> 当前 TaskNav 先把 Independent LaneRobotV2 的几何 Loss 和 Head 实验基线修正确，再进入 Complete Geometry + Visibility Mask + Cue Dropout + Missing weighting 的大创研究主线。
+> 当前 TaskNav 已修正 Independent LaneRobotV2 的几何 Loss 并准备好 Head 实验配置，下一步从头重训和完成 Pool 消融，再进入 Complete Geometry + Visibility Mask + Cue Dropout + Missing weighting 的大创研究主线。

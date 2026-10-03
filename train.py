@@ -1,22 +1,23 @@
+import argparse
+
 from ultralytics import YOLO
 from ultralytics.cfg import get_cfg
 
 
+DEFAULT_CFG = "ultralytics/cfg/default.yaml"
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train TaskNav with the default or a reproducible experiment config.")
+    parser.add_argument("--cfg", default=DEFAULT_CFG, help="Training YAML used to build and train the model.")
+    return parser.parse_args()
+
+
 def main():
-    default_yaml = "ultralytics/cfg/default.yaml"
-
-    # 读取 default.yaml
-    args = get_cfg(default_yaml)
-
-    # 这些字段应当已经在 default.yaml 里改好
-    # task: lane
-    # mode: train
-    # model: ultralytics/cfg/models/26/yolo26m-lane-independent.yaml
-    # data: ultralytics/cfg/datasets/lane-robot-4tasks.yaml
+    cli = parse_args()
+    args = get_cfg(cli.cfg)
     model = YOLO(args.model, task=args.task)
-
-    # 直接把 default.yaml 里的配置传给 train
-    model.train(cfg=default_yaml)
+    model.train(cfg=cli.cfg)
 
 
 if __name__ == "__main__":

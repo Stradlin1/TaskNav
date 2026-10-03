@@ -117,12 +117,12 @@ lane_hidden_dim: 512 # (int) hidden dimension of the first FC layer in the lane 
 lane_feat_h: 8 # (int) fixed feature height before flatten; original model uses 8 for 256x320 input at stride 32
 lane_feat_w: 10 # (int) fixed feature width before flatten; original model uses 10 for 256x320 input at stride 32
 lane_ce: 1.0 # (float) row-anchor x-class cross-entropy loss gain
-lane_loc: 2.0 # (float) expected-x SmoothL1 loss gain for visible points
+lane_loc: 2.0 # (float) differentiable full-grid expected-x + signed-offset SmoothL1 gain for visible points
 lane_exist: 1.0 # (float) auxiliary lane-existence BCE loss gain
-lane_smooth: 0.03 # (float) adjacent-row soft-argmax smoothness loss gain
-lane_label_smoothing: 0.02 # (float) label smoothing for row-anchor classification
+lane_smooth: 0.03 # (float) GT-relative adjacent-row first-derivative SmoothL1 gain
+lane_label_smoothing: 0.02 # (float) [0,1) smoothing for hard CE and visible-grid soft targets
 lane_offset: 3.0 # (float) sub-grid offset SmoothL1 loss gain for LaneRobotV2
-lane_curv: 0.02 # (float) second-order curvature regularization gain
+lane_curv: 0.02 # (float) GT-relative second-derivative SmoothL1 gain
 lane_soft_label: True # (bool) use Gaussian soft labels for visible x classes
 lane_soft_sigma: 1.2 # (float) Gaussian sigma in x-grid units for soft-label CE
 lane_softargmax_topk: 5 # (int) local top-k soft-argmax window for legacy cls-only outputs; V2 uses argmax + offset

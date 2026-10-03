@@ -1,6 +1,6 @@
 # TaskNav
 
-TaskNav 是基于 YOLO26 + LaneRobotV2 的单目导航结构感知项目。当前代码主线先解决 Row-Anchor 基线的模型正确性，再进入大创研究阶段的完整 Geometry、Visibility Mask、Navigation Cue Dropout、Missing-region weighted loss 与 RDK X5 部署。
+TaskNav 是基于 YOLO26 + LaneRobotV2 的单目导航结构感知项目。Row-Anchor 基线的六项模型正确性修复已经落地，当前进入从头重训与 Pool 消融阶段；基线冻结后再进入大创研究阶段的完整 Geometry、Visibility Mask、Navigation Cue Dropout、Missing-region weighted loss 与 RDK X5 部署。
 
 > 文档状态：2026-10-03  
 > 当前分支：`main`  
@@ -35,16 +35,26 @@ row 55      = y 0.3333333333
 order       = bottom-to-top
 ```
 
-## 当前最优先：模型正确性修复
+## 已完成：模型正确性修复
 
-在重新训练可信 baseline 前，必须完成以下六项：
+2026-10-03 已完成以下六项代码修改：
 
-1. 修复 `lane_loc` 经过 hard argmax 后无法向分类 logits 传播几何梯度的问题；推理仍保持 hard argmax。
-2. 将 `lane_smooth` / `lane_curv` 从“预测导数逼近 0”改为“预测一阶/二阶几何逼近 GT 一阶/二阶几何”。
-3. 增加 Loss 梯度与几何约束单元测试。
-4. 增加可复现的 `CE + Exist + Offset` 干净 baseline 训练入口。
-5. 保留 8x10 作为控制组，并增加 10x10、16x16 AdaptiveAvgPool Head 消融配置；实验后再决定是否替换默认 Head。
-6. 让 `lane_label_smoothing` 真正生效，并为其增加边界校验和测试。
+1. `lane_loc` 使用完整 x-grid softmax 期望与 signed offset 的训练专用可导位置；推理仍保持 hard argmax。
+2. `lane_smooth` / `lane_curv` 改为预测一阶/二阶几何对齐 GT 一阶/二阶几何。
+3. 新增 Loss 梯度、曲线、invalid mask、signed offset、finite 与 Head shape 测试。
+4. 新增可复现的 `CE + Exist + Offset` 干净 baseline 配置。
+5. 保留 8x10 控制组，并新增 10x10、16x16 AdaptiveAvgPool Head 消融配置。
+6. `lane_label_smoothing` 已作用于 hard CE、visible soft target 和 no-lane CE，并校验 `[0,1)`。
+
+训练入口：
+
+```bash
+python train.py
+python train.py --cfg ultralytics/cfg/experiments/lane_core_baseline.yaml
+python train.py --cfg ultralytics/cfg/experiments/lane_full_loss_8x10.yaml
+```
+
+当前代码验证：pytest 21 项全部通过；8x10、10x10、16x16 完整模型 build/forward/backward 通过；core 与 full-loss 8x10 均通过 1 图 train + 1 图 val、64×64、1 epoch CPU 微型训练；历史 8x10 `best.pt` 以及随机初始化 10x10 / 16x16 的双输出 ONNX checker 与 ORT parity 均通过。尚未运行全量数据 1–3 epoch smoke、三组正式消融或 120 epoch 从头重训。
 
 详细实现规范见：
 
@@ -55,7 +65,7 @@ order       = bottom-to-top
 
 ## 当前明确不做
 
-本轮模型修复不要顺手引入：
+本轮模型修复没有引入：
 
 - Evidence Head；
 - task supervision mask；
@@ -71,8 +81,10 @@ order       = bottom-to-top
 ## 训练与验证顺序
 
 ```text
-模型正确性六项修复
-  -> 单元测试
+模型正确性六项修复（已完成）
+  -> 单元测试 / 配置级 loss smoke / ONNX parity（已完成）
+  -> 1 epoch 微型数据训练 smoke（已完成）
+  -> 全量数据 1~3 epoch smoke（待运行）
   -> CE + Exist + Offset core baseline
   -> 完整修正版 loss baseline
   -> Pool 8x10 / 10x10 / 16x16 消融
@@ -98,4 +110,4 @@ tests/
 export_onnx.py
 ```
 
-当前历史 checkpoint 只能用于兼容性检查、迁移或 debug。由于 offset、decode、Validator、strict protocol 以及本轮 Loss 仍在修正，新的模型精度结论必须来自修复完成后的从头训练。
+当前历史 checkpoint 只能用于兼容性检查、迁移或 debug。由于 offset、decode、Validator、strict protocol 和本轮 Loss 已发生变化，新的模型精度结论必须来自修复完成后的从头训练。

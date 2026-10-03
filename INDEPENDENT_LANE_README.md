@@ -2,7 +2,7 @@
 
 > 更新日期：2026-10-03  
 > 当前主线：main  
-> 当前阶段：先修模型本体正确性，再重新训练可信 baseline；大创研究增强在 baseline 冻结后进行。
+> 当前阶段：六项模型正确性代码修复和 1 epoch 微型训练 smoke 已完成，等待全量数据 smoke、从头重训与 Pool 消融；大创研究增强在 baseline 冻结后进行。
 
 ## 1. 当前模型
 
@@ -109,45 +109,37 @@ lane_id x0 y0 x1 y1 ... x55 y55
 
 训练器已在 train / val DataLoader 创建前执行全量 label preflight。
 
-## 4. 当前真正需要修的模型问题
+## 4. 已完成的六项模型正确性修复
 
-### 4.1 lane_loc 训练路径不可导
+### 4.1 lane_loc 可导训练路径
 
-当前 V2 推理使用 hard argmax 是正确的，但训练时 lane_loc 如果也用：
+推理继续使用：
 
 ~~~text
 argmax(cls) + offset
 ~~~
 
-则 lane_loc 无法通过 argmax 给 cls logits 几何梯度。
-
-目标：
-
-- inference 继续 hard argmax；
-- training lane_loc 使用可导 soft position；
-- lane_loc.backward() 后 cls logits 梯度必须非零。
-
-### 4.2 smooth / curvature 旧定义偏向直线
-
-旧逻辑：
+训练几何损失改用：
 
 ~~~text
-d1_pred -> 0
-d2_pred -> 0
+soft_x = sum(softmax(cls_logits[0:160]) * grid_index)
+train_x = soft_x + clamp(offset, -0.5, +0.5)
 ~~~
 
-会主动惩罚真实弯曲结构。
+`lane_loc` 对 `train_x` 与 `target_x` 的归一化坐标计算 SmoothL1。梯度测试确认 cls x-grid logits 与 offset 均得到非零梯度；推理路径未改变。
 
-目标：
+### 4.2 smooth / curvature 对齐 GT 几何
+
+旧逻辑 `d1_pred -> 0`、`d2_pred -> 0` 已删除，当前为：
 
 ~~~text
 d1_pred -> d1_gt
 d2_pred -> d2_gt
 ~~~
 
-只在连续 valid GT Row 上计算。
+一阶项只使用相邻两行均 valid 的 pair，二阶项只使用连续三行均 valid 的 triplet；两边均除以 `x_grids - 1` 后计算 SmoothL1。
 
-### 4.3 新增 Loss 单测
+### 4.3 Loss 单测
 
 新增：
 
@@ -155,18 +147,20 @@ d2_pred -> d2_gt
 tests/test_lane_loss_geometry.py
 ~~~
 
-至少检查：
+当前覆盖：
 
 - lane_loc 对 cls logits 有非零梯度；
 - lane_loc 对 offset 有梯度；
 - 完美 GT 曲线的 smooth / curv 接近 0；
 - 直线预测弯曲 GT 时几何 loss 增大；
 - invalid Row 不参与；
-- Loss finite。
+- 四任务 total 与六个分量 finite；
+- 8x10 / 10x10 / 16x16 branch shape 与 backward；
+- hard / soft label smoothing 语义与非法边界。
 
-### 4.4 新增 core baseline
+### 4.4 core baseline
 
-新增独立实验配置，只启用：
+`ultralytics/cfg/experiments/lane_core_baseline.yaml` 只启用：
 
 ~~~text
 CE + Exist + Offset
@@ -182,7 +176,7 @@ lane_curv   = 0
 
 用来验证 Backbone / Fusion / Head / nearest-grid / signed-offset 本身。
 
-### 4.5 Pool size 消融
+### 4.5 Pool size 消融配置
 
 当前每个 branch 固定：
 
@@ -192,7 +186,7 @@ AdaptiveAvgPool2d(8,10)
 
 该设置来自早期 256x320 LaneRobot 设计，而当前输入为 640x640。
 
-增加控制实验：
+已提供：
 
 ~~~text
 8x10
@@ -204,7 +198,7 @@ AdaptiveAvgPool2d(8,10)
 
 在结果出来前，不直接删除 8x10。
 
-### 4.6 lane_label_smoothing 必须生效
+### 4.6 lane_label_smoothing 已生效
 
 当前配置项：
 
@@ -212,15 +206,7 @@ AdaptiveAvgPool2d(8,10)
 lane_label_smoothing: 0.02
 ~~~
 
-目前 Loss 没有真正读取。
-
-本轮要求实现：
-
-- LaneRobotLoss 读取该参数；
-- 校验 [0,1)；
-- hard-label CE 生效；
-- soft-label CE 也有明确 smoothing 语义；
-- 0.0 与非 0 值在测试中产生不同 loss。
+`LaneRobotLoss` 读取并校验 `[0,1)`。hard-label 分支直接传给 `F.cross_entropy`；visible soft-label 分支在 `0..159` 上混合 uniform，no-lane 概率保持 0；invalid/no-lane Row 继续走带 label smoothing 的 no-lane CE。
 
 ## 5. 六项修复后的 Loss
 
@@ -255,9 +241,9 @@ L =
 - Row Anchor 数量变化；
 - nearest-grid + signed-offset 推理解码变化。
 
-## 7. 推荐新增实验配置
+## 7. 实验配置
 
-建议在项目中建立明确 experiment configs，例如：
+当前配置：
 
 ~~~text
 ultralytics/cfg/experiments/
@@ -267,25 +253,21 @@ ultralytics/cfg/experiments/
   lane_full_loss_16x16.yaml
 ~~~
 
-要求每个配置都能独立复现，避免训练前手工改 default.yaml。
+四份配置的数据、seed、epochs、batch、optimizer 保持一致；三份 full-loss 配置只切换 model YAML，避免训练前手工改 `default.yaml`。
 
-## 8. 验证顺序
+## 8. 验证状态与后续顺序
 
 ~~~text
-1. 修 lane_loc
-2. 修 smooth / curv
-3. 实现 label smoothing
-4. 加 Loss tests
-5. 建 core baseline config
-6. 建 8x10 / 10x10 / 16x16 configs
-7. 跑 protocol / validator / loss tests
-8. 1~3 epoch smoke
-9. 跑 core baseline
-10. 跑完整修正版 Loss
-11. 跑 Pool 消融
-12. ONNX parity
-13. 从头正式训练
-14. 冻结 baseline
+1. 六项代码修改：完成
+2. protocol / validator / loss tests：21/21 通过
+3. core / full 8x10 随机合法 batch loss backward：通过
+4. 8x10 / 10x10 / 16x16 完整模型 build + forward + backward：通过
+5. 历史 8x10 best.pt 与随机初始化 10x10 / 16x16 ONNX checker / ORT parity：通过
+6. core / full-loss 8x10 的 1 图 train + 1 图 val、64×64、1 epoch CPU 微型训练：通过
+7. 全量数据 1~3 epoch smoke：未运行
+8. core baseline / full corrected loss 正式训练：未运行
+9. Pool 消融与从头正式训练：未运行
+10. 冻结 baseline：待正式实验结果
 ~~~
 
 ## 9. Baseline 冻结后才进入大创研究增强
@@ -318,21 +300,23 @@ tests/test_lane_validator_metrics.py
 tests/test_lane_loss_geometry.py
 ~~~
 
-仓库当前没有 GitHub Actions workflow，因此仍需在训练环境手动执行测试。
+仓库当前没有 GitHub Actions workflow。本轮在 `lane_robot` 环境安装 pytest 9.1.1 后执行三份指定测试和整个 `tests/`，实际 21 项及 6 个 subtests 全部通过；为避开系统 ROS pytest 插件，运行时设置 `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`。
 
-## 11. 模型修复完成判据
+## 11. 模型修复状态
 
-至少满足：
+代码级判据已经满足：
 
 - lane_loc 对 cls logits 有非零梯度；
 - GT-relative smooth / curv 逻辑正确；
 - label smoothing 真正生效；
 - core baseline 可复现；
 - 8x10 / 10x10 / 16x16 均能构建 / forward / backward；
-- smoke 无 NaN / Inf；
+- 随机合法 batch loss smoke 无 NaN / Inf；
 - cls / offset 输出 shape 不变；
 - ONNX 两输出协议不变；
 - ORT parity 通过。
+
+尚未完成的是全量数据 1–3 epoch smoke、正式 core/full baseline 重训和三组 Pool 精度消融，因此还不能冻结新的精度 baseline。已完成的微型训练仅验证 Trainer、DataLoader、label preflight、optimizer、loss backward 和 Validator 能连通，不作为精度结果。
 
 完整 Codex 修改任务见：
 

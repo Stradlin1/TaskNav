@@ -2,7 +2,7 @@
 
 > 更新日期：2026-10-03  
 > 当前主线：main  
-> 当前阶段：baseline 模型正确性修复，尚未开始新一轮正式精度结论。
+> 当前阶段：baseline 六项模型正确性代码修复已完成，尚未开始新一轮正式精度训练。
 
 ## 1. 当前模型
 
@@ -49,7 +49,7 @@ decode       = argmax(cls) + offset
 - protocol tests；
 - validator tests。
 
-这些改动解决的是协议和评测正确性，不代表 Loss 设计已经完全正确。
+这些协议与评测修复之上，本轮又完成了下述六项 Loss、配置和测试修复。
 
 ## 3. 与原始单任务仓库对比后确认的模型问题
 
@@ -100,13 +100,11 @@ d2_pred -> d2_gt
 
 三组消融，不直接拍脑袋替换。
 
-### 3.4 lane_label_smoothing 是继承的死配置
+### 3.4 lane_label_smoothing 曾是继承的死配置
 
-default.yaml 中存在该项，但 LaneRobotLoss 未读取。
+`default.yaml` 中原本存在该项，但 LaneRobotLoss 未读取。本轮已实现其真实作用并加测试。
 
-本轮实现其真实作用并加测试。
-
-## 4. 本轮六项修改
+## 4. 本轮已完成的六项修改
 
 1. 修 lane_loc 可导训练路径；
 2. smooth / curv 改 GT-relative geometry；
@@ -114,6 +112,16 @@ default.yaml 中存在该项，但 LaneRobotLoss 未读取。
 4. 新增 CE + Exist + Offset core baseline 配置；
 5. 新增 8x10 / 10x10 / 16x16 Pool 消融配置；
 6. 实现 lane_label_smoothing。
+
+具体实现：
+
+- `_decode_x_train()` 仅对 `0..159` 的 logits 做 softmax 完整期望，并加 clamp 后的 signed offset；`_decode_x()` 与部署解码仍为 hard argmax + offset。
+- smooth 比较 `d1_pred` 与 `d1_gt`，curv 比较 `d2_pred` 与 `d2_gt`，分别使用 valid pair / triplet mask。
+- hard CE 使用 PyTorch label smoothing；visible soft target 只在可见 x-grid 上做 uniform smoothing，no-lane target 为 0；invalid Row 走 no-lane CE。
+- `train.py` 新增可选 `--cfg`，不传时仍使用 `ultralytics/cfg/default.yaml`，同一 cfg 同时用于模型构建和 `model.train()`。
+- core baseline：`ultralytics/cfg/experiments/lane_core_baseline.yaml`。
+- full-loss 配置：`lane_full_loss_8x10.yaml`、`lane_full_loss_10x10.yaml`、`lane_full_loss_16x16.yaml`。
+- 新模型配置：`yolo26s-lane-independent-10x10.yaml`、`yolo26s-lane-independent-16x16.yaml`；原 8x10 控制组未修改。
 
 详细修改要求见：
 
@@ -165,7 +173,7 @@ Visibility 是 supervision / weighting / evaluation metadata，不要求模型�
 - validator；
 - strict protocol；
 
-且本轮还要修改：
+本轮已经修改：
 
 - loc；
 - smooth；
@@ -187,7 +195,27 @@ pytest
 -> freeze baseline
 ~~~
 
-## 8. Baseline 冻结记录
+## 8. 本轮实际验证
+
+~~~text
+pytest tests: 21/21 PASS, 6 subtests PASS
+core baseline random legal batch loss/backward: PASS
+full-loss 8x10 random legal batch loss/backward: PASS
+core 1-image train + 1-image val, 64x64, 1-epoch CPU smoke: PASS
+full-loss 8x10 1-image train + 1-image val, 64x64, 1-epoch CPU smoke: PASS
+8x10 complete model build/forward/backward: PASS
+10x10 complete model build/forward/backward: PASS
+16x16 complete model build/forward/backward: PASS
+8x10 historical best.pt ONNX checker / two-output ORT parity: PASS
+10x10 random full model ONNX checker / two-output ORT parity: PASS
+16x16 random full model ONNX checker / two-output ORT parity: PASS
+~~~
+
+ONNX 输出仍为 `cls_logits [1,161,56,4]` 与 `offset [1,1,56,4]`。历史 8x10 `best.pt` 回归中，最大绝对误差分别为 `4.5776367e-05` 与 `3.4198165e-06`；随机初始化 10x10 / 16x16 的最大绝对误差均不超过 `2.2351742e-08`。
+
+未运行：全量数据 1–3 epoch smoke、core/full 120 epoch 从头训练、三组 Pool 正式精度消融。微型训练只验证 Trainer/DataLoader/optimizer/loss/Validator 链路；历史权重的 parity 只能证明接口未回归，两者都不能代表修复后 Loss 的新精度。
+
+## 9. Baseline 冻结记录
 
 至少记录：
 

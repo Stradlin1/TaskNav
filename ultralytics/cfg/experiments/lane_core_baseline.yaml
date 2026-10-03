@@ -1,0 +1,17 @@
+# TaskNav clean LaneRobotV2 baseline: nearest-grid CE + existence + signed offset only.
+task: lane
+mode: train
+model: ultralytics/cfg/models/26/yolo26s-lane-independent.yaml
+data: ultralytics/cfg/datasets/lane-robot-4tasks.yaml
+imgsz: 640
+batch: 16
+epochs: 120
+optimizer: AdamW
+seed: 0
+
+lane_ce: 1.0
+lane_loc: 0.0
+lane_exist: 1.0
+lane_smooth: 0.0
+lane_curv: 0.0
+lane_offset: 3.0

@@ -1286,6 +1286,11 @@ class LaneRobotLoss:
         self.lambda_offset = float(getattr(args, "lane_offset", 2.0)) if args is not None else 2.0
         self.soft_label = bool(getattr(args, "lane_soft_label", True)) if args is not None else True
         self.soft_sigma = float(getattr(args, "lane_soft_sigma", 1.5)) if args is not None else 1.5
+        self.label_smoothing = float(getattr(args, "lane_label_smoothing", 0.0)) if args is not None else 0.0
+        if not 0.0 <= self.label_smoothing < 1.0:
+            raise ValueError(
+                f"lane_label_smoothing must satisfy 0.0 <= value < 1.0, got {self.label_smoothing}"
+            )
         self.topk = int(getattr(args, "lane_softargmax_topk", 5)) if args is not None else 5
         raw_task_weights = getattr(args, "lane_task_weights", None) if args is not None else None
         if isinstance(raw_task_weights, str):
@@ -1343,27 +1348,55 @@ class LaneRobotLoss:
         topv, topi = probs.topk(k=k, dim=1)
         return (topv * topi.to(logits.dtype)).sum(dim=1) / topv.sum(dim=1).clamp_min(1e-6)
 
-    def _soft_label_ce(self, logits, target, target_x, valid):
+    def _decode_x_train(self, logits, offset=None):
+        """Decode a differentiable training position without changing hard inference decoding."""
         import torch
+
+        cls_logits = logits[:, : self.x_grids]
+        probs = cls_logits.softmax(dim=1)
+        grid = torch.arange(self.x_grids, device=logits.device, dtype=logits.dtype).view(1, -1, 1, 1)
+        soft_x = (probs * grid).sum(dim=1)
+        if offset is not None:
+            soft_x = soft_x + offset.squeeze(1).clamp(-0.5, 0.5)
+        return soft_x
+
+    def _soft_visible_targets(self, logits, target):
+        """Build normalized Gaussian targets whose smoothing mass stays on visible x-grid classes."""
+        import torch
+
+        grid = torch.arange(self.x_grids, device=logits.device, dtype=logits.dtype).view(1, -1, 1, 1)
+        target_float = target.clamp(0, self.x_grids - 1).to(logits.dtype).unsqueeze(1)
+        visible = torch.exp(-0.5 * ((grid - target_float) / max(self.soft_sigma, 1e-6)) ** 2)
+        visible = visible / visible.sum(dim=1, keepdim=True).clamp_min(1e-6)
+        if self.label_smoothing:
+            uniform_visible = torch.full_like(visible, 1.0 / self.x_grids)
+            visible = (1.0 - self.label_smoothing) * visible + self.label_smoothing * uniform_visible
+
+        soft = logits.new_zeros(logits.shape)
+        soft[:, : self.x_grids] = visible
+        return soft
+
+    def _soft_label_ce(self, logits, target, target_x, valid):
         import torch.nn.functional as F
 
-        if not valid.any():
-            return logits.sum() * 0.0
-        c = logits.shape[1]
-        grid = torch.arange(c, device=logits.device, dtype=logits.dtype).view(1, c, 1, 1)
         # The classification branch predicts the nearest discrete grid. Keep its soft-label distribution centered
         # on that grid so the separate offset branch can learn the signed sub-grid residual without double-counting
         # the fractional part already represented by a continuous soft-label center.
-        target_float = target.clamp(0, self.x_grids - 1).to(logits.dtype).unsqueeze(1)
-        soft = torch.exp(-0.5 * ((grid - target_float) / max(self.soft_sigma, 1e-6)) ** 2)
-        soft[:, self.no_lane_idx : self.no_lane_idx + 1] = 0.0
-        soft = soft / soft.sum(dim=1, keepdim=True).clamp_min(1e-6)
-        logp = F.log_softmax(logits, dim=1)
-        loss_valid = (-(soft * logp).sum(dim=1))[valid].mean()
+        soft = self._soft_visible_targets(logits, target)
+        if valid.any():
+            logp = F.log_softmax(logits, dim=1)
+            loss_valid = (-(soft * logp).sum(dim=1))[valid].mean()
+        else:
+            loss_valid = logits.sum() * 0.0
 
         invalid = ~valid
         if invalid.any():
-            loss_invalid = F.cross_entropy(logits.permute(0, 2, 3, 1)[invalid], target[invalid], reduction="mean")
+            loss_invalid = F.cross_entropy(
+                logits.permute(0, 2, 3, 1)[invalid],
+                target[invalid],
+                reduction="mean",
+                label_smoothing=self.label_smoothing,
+            )
         else:
             loss_invalid = logits.sum() * 0.0
         return loss_valid + 0.2 * loss_invalid
@@ -1376,16 +1409,21 @@ class LaneRobotLoss:
         if self.soft_label:
             ce = self._soft_label_ce(logits, target, target_x, valid)
         else:
-            ce = F.cross_entropy(logits, target, reduction="mean")
+            ce = F.cross_entropy(
+                logits,
+                target,
+                reduction="mean",
+                label_smoothing=self.label_smoothing,
+            )
 
         no_lane_logit = logits[:, self.no_lane_idx]
         lane_exist_logit = torch.logsumexp(logits[:, : self.x_grids], dim=1) - no_lane_logit
         exist = F.binary_cross_entropy_with_logits(lane_exist_logit, valid.float())
 
-        pred_x = self._decode_x(logits, offset=offset)
+        pred_x_train = self._decode_x_train(logits, offset=offset)
         if valid.any():
             loc = F.smooth_l1_loss(
-                pred_x[valid] / max(self.x_grids - 1, 1),
+                pred_x_train[valid] / max(self.x_grids - 1, 1),
                 target_x[valid] / max(self.x_grids - 1, 1),
             )
         else:
@@ -1400,20 +1438,22 @@ class LaneRobotLoss:
 
         valid_pair = valid[:, 1:] & valid[:, :-1]
         if valid_pair.any():
-            d1 = pred_x[:, 1:] - pred_x[:, :-1]
+            d1_pred = pred_x_train[:, 1:] - pred_x_train[:, :-1]
+            d1_gt = target_x[:, 1:] - target_x[:, :-1]
             smooth = F.smooth_l1_loss(
-                d1[valid_pair] / max(self.x_grids - 1, 1),
-                torch.zeros_like(d1[valid_pair]),
+                d1_pred[valid_pair] / max(self.x_grids - 1, 1),
+                d1_gt[valid_pair] / max(self.x_grids - 1, 1),
             )
         else:
             smooth = logits.sum() * 0.0
 
         valid_triplet = valid[:, 2:] & valid[:, 1:-1] & valid[:, :-2]
         if valid_triplet.any():
-            d2 = pred_x[:, 2:] - 2.0 * pred_x[:, 1:-1] + pred_x[:, :-2]
+            d2_pred = pred_x_train[:, 2:] - 2.0 * pred_x_train[:, 1:-1] + pred_x_train[:, :-2]
+            d2_gt = target_x[:, 2:] - 2.0 * target_x[:, 1:-1] + target_x[:, :-2]
             curv = F.smooth_l1_loss(
-                d2[valid_triplet] / max(self.x_grids - 1, 1),
-                torch.zeros_like(d2[valid_triplet]),
+                d2_pred[valid_triplet] / max(self.x_grids - 1, 1),
+                d2_gt[valid_triplet] / max(self.x_grids - 1, 1),
             )
         else:
             curv = logits.sum() * 0.0
