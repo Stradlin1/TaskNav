@@ -1,544 +1,341 @@
 # TaskNav 四任务 Independent LaneRobotV2 基线
 
-> 更新日期：2026-10-02  
+> 更新日期：2026-10-03  
 > 当前主线：main  
-> 本文对应代码基线：main（2026-10-02，已统一核心 Row Anchor fallback）  
-> 当前阶段：先闭环 LaneRobot 四任务基线，再进入 TaskNav Evidence / Completion 方向。
+> 当前阶段：先修模型本体正确性，再重新训练可信 baseline；大创研究增强在 baseline 冻结后进行。
 
-## 1. 当前模型结构
-
-当前默认模型是：
-
-~~~text
-yolo26s-lane-independent.yaml
-~~~
-
-结构：
+## 1. 当前模型
 
 ~~~text
 RGB 640x640
   ↓
-YOLO Backbone
+YOLO26 Backbone
   ↓
 P4 / P5 Fusion
   ↓
 LaneRobotV2Independent
-  ├── task branch 0
-  ├── task branch 1
-  ├── task branch 2
-  └── task branch 3
+  ├── branch 0
+  ├── branch 1
+  ├── branch 2
+  └── branch 3
 ~~~
 
-四个任务只共享 Backbone / Fusion。进入 prediction head 后，每个任务都有独立的：
+四个 branch 共享 Backbone / Fusion，但每个 prediction branch 独立包含：
 
 ~~~text
 Conv1x1
 AdaptiveAvgPool2d
+Flatten
 FC1
+ReLU
 cls_fc2
 offset_fc
 ~~~
 
-当前四个 task 之间不共享 prediction branch 参数，也不存在 task 维度上的 Softmax 竞争。
+task 维度之间没有 Softmax 竞争。模型不学习 task 名称文本。
 
-## 2. 当前张量协议
+比赛与大创分开训练，不使用 task supervision mask 混训。
 
-默认配置：
+## 2. 当前输出与几何协议
+
+默认：
 
 ~~~text
 imgsz       = 640
 x_grids     = 160
-classes/row = 161
 row_anchors = 56
 num_lanes   = 4
 ~~~
 
-分类状态：
-
-~~~text
-0..159 : 横向 grid
-160    : no-lane
-~~~
-
-训练 / PyTorch 输出：
+输出：
 
 ~~~text
 cls    [B, 161, 56, 4]
 offset [B,   1, 56, 4]
 ~~~
 
-当前根目录 export_onnx.py 导出两个独立 ONNX 输出：
+分类：
 
 ~~~text
-cls_logits [B, 161, 56, 4]
-offset     [B,   1, 56, 4]
+0..159 = x grid
+160    = no-lane
 ~~~
 
-LaneRobotV2Independent 内部仍保留 export=True 的拼接兼容逻辑，但部署时应以 export_onnx.py 的实际输出契约为准。
-
-## 3. 当前 manual 标签协议
-
-当前四任务训练使用：
-
-~~~text
-ultralytics/cfg/datasets/lane-robot-4tasks.yaml
-~~~
-
-标签文件每个非空行必须严格为：
-
-~~~text
-lane_id x0 y0 x1 y1 ... x55 y55
-~~~
-
-固定 Row Anchor 定义：
-
-~~~text
-row 0  -> y = 1.000000      图像底部
-row 1  -> y ≈ 0.987879
-...
-row 55 -> y = 0.333333      图像高度 1/3 处
-~~~
-
-公式：
-
-~~~text
-y(row) = 1.0 - row / 55 * (2/3)
-~~~
-
-因此 56 个 Row Anchor 覆盖原图的下方 2/3，并且索引顺序是：
-
-~~~text
-bottom -> top
-row 0  -> row 55
-~~~
-
-x 规则：
-
-- x 为相对整张图片宽度的归一化坐标；
-- 有效 x 必须位于 [0, 1]；
-- x=-1 表示该固定 Row Anchor 没有点；
-- 当前 strict manual 协议不接受其他负值；
-- 某个 lane_id 整行不出现，表示该 task 在整张图不存在；
-- 空标签文件表示全部 task 不存在。
-
-当前 data YAML 已启用：
-
-~~~yaml
-strict_labels: true
-~~~
-
-同时 default.yaml 中：
-
-~~~yaml
-lane_strict_labels: True
-~~~
-
-严格模式会校验：
-
-1. 每个非空标签行恰好包含 56 对 x/y；
-2. y 必须匹配上述 56 个固定 Anchor；
-3. y 顺序必须 bottom-to-top；
-4. x 只能是 -1 或 [0,1]；
-5. task_id 必须是整数且位于当前 num_lanes 范围；
-6. 同一标签文件不能重复 task_id；
-7. NaN / Inf 会直接报错；
-8. strict 模式下缺失 txt 标签会直接报错。
-
-相关实现：
-
-~~~text
-ultralytics/models/yolo/lane/protocol.py
-ultralytics/models/yolo/lane/dataset.py
-ultralytics/models/yolo/lane/train.py
-tests/test_tasknav_lane_protocol.py
-~~~
-
-训练器现在会在创建 train / val DataLoader 时先运行全量 label preflight。它只读取标签，不解码图片；任一缺失或非法标签会在 epoch 1 之前直接终止。空 txt 仍是合法的全任务 absent 样本。
-
-## 4. Dataset 与训练语义
-
-Dataset 对 TXT 标签按出现顺序映射：
-
-~~~text
-第 0 对 x/y  -> row 0
-第 1 对 x/y  -> row 1
-...
-第 55 对 x/y -> row 55
-~~~
-
-训练目标：
-
-~~~text
-lane   [B, 56, 4]
-lane_x [B, 56, 4]
-~~~
-
-其中 lane 是离散 grid class，lane_x 是连续 grid 坐标。
-
-当前 x 映射：
+连续坐标：
 
 ~~~text
 target_x = x_norm * (x_grids - 1)
-         = x_norm * 159
 ~~~
 
-离散分类目标取最近 grid：
+离散目标：
 
 ~~~text
 target_class = round(target_x)
 ~~~
 
-V2 offset 定义为相对最近 grid 的有符号残差：
+offset：
 
 ~~~text
 offset_gt = target_x - target_class
 ~~~
 
-理论范围约为：
+推理解码：
 
 ~~~text
-[-0.5, +0.5]
+pred_x = argmax(cls_logits) + offset
 ~~~
 
-当前 V2 解码：
+这套 nearest-grid + signed-offset 协议继续保留。
+
+## 3. Row Anchor 与 strict manual protocol
 
 ~~~text
-pred_x = argmax(class_logits) + offset
+row 0  -> y = 1.0
+row 55 -> y = 0.3333333333
+order  -> bottom-to-top
 ~~~
 
-当前 soft-label 也以离散 target_class 为中心，避免 continuous soft-label 与 offset 对同一小数部分重复补偿。
-
-## 5. 当前默认训练配置
-
-default.yaml 当前主要值：
+当前标签：
 
 ~~~text
-task       = lane
-model      = yolo26s-lane-independent.yaml
-data       = ultralytics/cfg/datasets/lane-robot-4tasks.yaml
-
-epochs     = 120
-patience   = 25
-batch      = 16
-imgsz      = 640
-
-optimizer  = AdamW
-pretrained = False
-amp        = False
+lane_id x0 y0 x1 y1 ... x55 y55
 ~~~
 
-Lane 参数：
+当前 x：
+
+- [0,1]：有效点；
+- -1：不存在；
+- strict baseline 当前不接受 -2。
+
+训练器已在 train / val DataLoader 创建前执行全量 label preflight。
+
+## 4. 当前真正需要修的模型问题
+
+### 4.1 lane_loc 训练路径不可导
+
+当前 V2 推理使用 hard argmax 是正确的，但训练时 lane_loc 如果也用：
 
 ~~~text
-lane_x_grids        = 160
-lane_row_anchors    = 56
-lane_num_lanes      = 4
-lane_task_weights   = [1,1,1,1]
-
-lane_y_start        = 1.0
-lane_y_end          = 0.3333333333
-lane_strict_labels  = True
-
-lane_ce             = 1.0
-lane_loc            = 2.0
-lane_exist          = 1.0
-lane_smooth         = 0.03
-lane_offset         = 3.0
-lane_curv           = 0.02
-
-lane_soft_label     = True
-lane_soft_sigma     = 1.2
-lane_softargmax_topk= 5
+argmax(cls) + offset
 ~~~
 
-标准入口：
+则 lane_loc 无法通过 argmax 给 cls logits 几何梯度。
 
-~~~bash
-python train.py
-~~~
+目标：
 
-train.py 读取：
+- inference 继续 hard argmax；
+- training lane_loc 使用可导 soft position；
+- lane_loc.backward() 后 cls logits 梯度必须非零。
+
+### 4.2 smooth / curvature 旧定义偏向直线
+
+旧逻辑：
 
 ~~~text
-ultralytics/cfg/default.yaml
+d1_pred -> 0
+d2_pred -> 0
 ~~~
 
-当前 data YAML 路径为：
+会主动惩罚真实弯曲结构。
+
+目标：
+
+~~~text
+d1_pred -> d1_gt
+d2_pred -> d2_gt
+~~~
+
+只在连续 valid GT Row 上计算。
+
+### 4.3 新增 Loss 单测
+
+新增：
+
+~~~text
+tests/test_lane_loss_geometry.py
+~~~
+
+至少检查：
+
+- lane_loc 对 cls logits 有非零梯度；
+- lane_loc 对 offset 有梯度；
+- 完美 GT 曲线的 smooth / curv 接近 0；
+- 直线预测弯曲 GT 时几何 loss 增大；
+- invalid Row 不参与；
+- Loss finite。
+
+### 4.4 新增 core baseline
+
+新增独立实验配置，只启用：
+
+~~~text
+CE + Exist + Offset
+~~~
+
+即：
+
+~~~text
+lane_loc    = 0
+lane_smooth = 0
+lane_curv   = 0
+~~~
+
+用来验证 Backbone / Fusion / Head / nearest-grid / signed-offset 本身。
+
+### 4.5 Pool size 消融
+
+当前每个 branch 固定：
+
+~~~text
+AdaptiveAvgPool2d(8,10)
+~~~
+
+该设置来自早期 256x320 LaneRobot 设计，而当前输入为 640x640。
+
+增加控制实验：
+
+~~~text
+8x10
+10x10
+16x16
+~~~
+
+除 feat_h / feat_w 外其他训练条件保持一致。
+
+在结果出来前，不直接删除 8x10。
+
+### 4.6 lane_label_smoothing 必须生效
+
+当前配置项：
 
 ~~~yaml
-path: datasets/datasets
-train: images/train
-val: images/valid
-train_labels: labels_corrected/train
-val_labels: labels_corrected/valid
+lane_label_smoothing: 0.02
 ~~~
 
-这里的 datasets/datasets 是当前本地数据实际目录结构，不是误写。
+目前 Loss 没有真正读取。
 
-## 6. 当前 Validator 定义
+本轮要求实现：
 
-当前 Validator 已将“存在性”和“定位精度”拆开。
+- LaneRobotLoss 读取该参数；
+- 校验 [0,1)；
+- hard-label CE 生效；
+- soft-label CE 也有明确 smoothing 语义；
+- 0.0 与非 0 值在测试中产生不同 loss。
 
-定位指标：
+## 5. 六项修复后的 Loss
 
 ~~~text
-lane_matched_mae
-lane_matched_mae_px
-Acc@1
-Acc@3
-Acc@5
+L =
+  lambda_ce     * L_ce
++ lambda_loc    * L_loc_differentiable
++ lambda_exist  * L_exist
++ lambda_smooth * L_first_order_gt
++ lambda_curv   * L_second_order_gt
++ lambda_offset * L_signed_offset
 ~~~
 
-存在性指标：
+注意：
+
+- training loc position 可以使用 soft expectation；
+- inference 仍使用 hard argmax + offset；
+- smooth / curv 必须相对 GT 几何计算。
+
+## 6. 本轮不要顺手改的东西
+
+本轮不要引入：
+
+- Evidence Head；
+- Visibility prediction；
+- task supervision mask；
+- 比赛 / 大创混训；
+- 动态 N；
+- Transformer / GNN / BEV / 时序；
+- Depth Branch；
+- Completion Module；
+- Row Anchor 数量变化；
+- nearest-grid + signed-offset 推理解码变化。
+
+## 7. 推荐新增实验配置
+
+建议在项目中建立明确 experiment configs，例如：
 
 ~~~text
-lane_miss_rate
-lane_exist_precision
-lane_exist_recall
-lane_exist_f1
-lane_exist_acc
+ultralytics/cfg/experiments/
+  lane_core_baseline.yaml
+  lane_full_loss_8x10.yaml
+  lane_full_loss_10x10.yaml
+  lane_full_loss_16x16.yaml
 ~~~
 
-定义：
+要求每个配置都能独立复现，避免训练前手工改 default.yaml。
+
+## 8. 验证顺序
 
 ~~~text
-valid      = GT x >= 0
-pred_valid = pred x >= 0
-matched    = valid AND pred_valid
+1. 修 lane_loc
+2. 修 smooth / curv
+3. 实现 label smoothing
+4. 加 Loss tests
+5. 建 core baseline config
+6. 建 8x10 / 10x10 / 16x16 configs
+7. 跑 protocol / validator / loss tests
+8. 1~3 epoch smoke
+9. 跑 core baseline
+10. 跑完整修正版 Loss
+11. 跑 Pool 消融
+12. ONNX parity
+13. 从头正式训练
+14. 冻结 baseline
 ~~~
 
-matched MAE 只统计 matched 点，no-lane sentinel -1 不再作为 x 坐标参加 MAE。
+## 9. Baseline 冻结后才进入大创研究增强
 
-Acc@1/3/5 的分母仍然是全部 GT valid 点，因此漏检会自动判为 tolerance failure。
-
-存在性：
+大创主线：
 
 ~~~text
-TP = GT有点，预测有点
-FP = GT没点，预测有点
-FN = GT有点，预测没点
-TN = GT没点，预测没点
+Complete Geometry
++ Visibility Mask
++ Navigation Cue Dropout
++ Missing-region weighted loss
++ specialized robustness benchmark
++ RDK X5 deployment
 ~~~
 
-当前 fitness：
+Visibility 只作为标签 / loss weighting / evaluation metadata，不新增 Evidence Head。
 
-~~~text
-fitness =
-    Acc@3
-  + 0.5 * Acc@5
-  - 0.003 * matched_MAE
-  + 0.05 * Exist_F1
-~~~
+## 10. 当前测试
 
-MAE_px 使用严格 grid-to-pixel 比例：
-
-~~~text
-(image_width - 1) / (x_grids - 1)
-~~~
-
-相关测试：
-
-~~~text
-tests/test_lane_validator_metrics.py
-~~~
-
-注意：仓库目前没有 GitHub Actions workflow，因此“测试文件存在”不等于“每次提交都已经自动通过 CI”。
-
-## 7. ONNX 导出
-
-当前 export_onnx.py 已移除旧机器绝对路径作为唯一入口。
-
-默认 checkpoint：
-
-~~~text
-runs/lane/train/weights/best.pt
-~~~
-
-基本用法：
-
-~~~bash
-python export_onnx.py
-~~~
-
-指定输入输出：
-
-~~~bash
-python export_onnx.py \
-  --weights runs/lane/train/weights/best.pt \
-  --output runs/lane/train/weights/best.onnx
-~~~
-
-主要能力：
-
-- --weights / --output；
-- --imgsz；
-- --opset；
-- --device；
-- 单文件 ONNX 默认策略；
-- 可选 --external-data；
-- 可选 --simplify；
-- 自动读取实际 Head 的 x_grids / row_anchors / num_lanes；
-- 自动校验 PyTorch 输出 shape；
-- onnx.checker 检查；
-- 默认执行 ONNX Runtime 数值一致性校验；
-- 检查输出名称、shape、NaN / Inf；
-- 使用 atol / rtol 比较 PyTorch 与 ONNX Runtime 输出。
-
-默认输出仍为：
-
-~~~text
-cls_logits
-offset
-~~~
-
-TaskNav Evidence Head 尚未实现，因此当前没有第三个 evidence 输出。
-
-## 8. 当前测试
-
-当前新增：
+已有：
 
 ~~~text
 tests/test_tasknav_lane_protocol.py
 tests/test_lane_validator_metrics.py
 ~~~
 
-建议在正式训练前执行：
-
-~~~bash
-pytest tests/test_tasknav_lane_protocol.py
-pytest tests/test_lane_validator_metrics.py
-~~~
-
-标准训练入口还会自动执行 train / val 全量 manual-label preflight，并打印 images / labels / annotations / empty labels 统计。只有 preflight 全部通过才会进入训练 batch。
-
-随后继续做短周期 smoke run，确认：
-
-- 数据可完整加载；
-- loss finite；
-- 四任务 shape 正确；
-- Validator 指标正常；
-- best.pt / last.pt 正常保存；
-- Row Anchor 可视化方向正确；
-- ONNX 导出与 ORT parity 通过。
-
-## 9. 当前已知未完成事项
-
-### 9.1 核心 Row Anchor fallback 已统一
-
-核心 Lane 模块的最终 fallback 已统一为正式 manual 协议：
+本轮新增：
 
 ~~~text
-y_start = 1.0
-y_end   = 0.3333333333
+tests/test_lane_loss_geometry.py
 ~~~
 
-覆盖：
+仓库当前没有 GitHub Actions workflow，因此仍需在训练环境手动执行测试。
+
+## 11. 模型修复完成判据
+
+至少满足：
+
+- lane_loc 对 cls logits 有非零梯度；
+- GT-relative smooth / curv 逻辑正确；
+- label smoothing 真正生效；
+- core baseline 可复现；
+- 8x10 / 10x10 / 16x16 均能构建 / forward / backward；
+- smoke 无 NaN / Inf；
+- cls / offset 输出 shape 不变；
+- ONNX 两输出协议不变；
+- ORT parity 通过。
+
+完整 Codex 修改任务见：
 
 ~~~text
-ultralytics/models/yolo/lane/dataset.py
-ultralytics/models/yolo/lane/train.py
-ultralytics/models/yolo/lane/val.py
-ultralytics/models/yolo/lane/plotting.py
+CODEX_MODEL_FIX_TARGET.md
 ~~~
-
-因此标准配置和最终 fallback 现在都遵循同一语义：
-
-~~~text
-row 0  = image bottom
-row 55 = image height 1/3
-order  = bottom-to-top
-~~~
-
-### 9.2 通用 lane 默认入口已统一到四任务 baseline
-
-Ultralytics 通用映射现在使用：
-
-~~~text
-TASK2DATA["lane"]            = lane-robot-4tasks.yaml
-TASK2CALIBRATIONDATA["lane"] = lane-robot-4tasks.yaml
-TASK2MODEL["lane"]           = yolo26s-lane-independent.yaml
-~~~
-
-旧文件名：
-
-~~~text
-ultralytics/cfg/datasets/lane-robot.yaml
-~~~
-
-仍保留用于兼容显式引用，但内容已同步为当前四任务 strict manual 配置，不再包含历史绝对路径、单任务 num_lanes=1 或 0.67 -> 1.0 几何。
-
-### 9.3 动态 N 尚未实现
-
-当前任务数仍同时写在：
-
-~~~text
-default.yaml
-lane-robot-4tasks.yaml
-yolo26*-lane-independent.yaml
-~~~
-
-当前三处均为 4，因此四任务训练一致。
-
-但“只改 default.yaml 就切换任意 N”的 TaskNav 目标尚未实现。
-
-### 9.4 独立推理辅助脚本仍有历史配置
-
-infer.py / infer_onnx.py 以及部分旧 helper script 仍包含历史机器路径或固定参数。
-
-当前部署基线应优先以：
-
-~~~text
-export_onnx.py
-模型实际 Head 元数据
-正式部署端配置
-~~~
-
-为准。
-
-### 9.5 当前任务名称仍是 generic names
-
-data YAML 目前仍为：
-
-~~~text
-lane_task_0
-lane_task_1
-lane_task_2
-lane_task_3
-~~~
-
-TaskNav 正式功能语义需要后续明确映射到：
-
-~~~text
-reference_guide
-left_boundary
-right_boundary
-reserve_3
-~~~
-
-## 10. 基线训练原则
-
-由于近期已经修改：
-
-- offset target；
-- V2 decode；
-- soft-label 中心；
-- Validator / fitness；
-- strict manual protocol；
-
-历史旧规则下训练出的 checkpoint 不应直接用于判断当前规则精度。
-
-推荐：
-
-~~~text
-最新代码
-  ↓
-协议测试
-  ↓
-短周期 smoke run
-  ↓
-从头正式训练
-  ↓
-冻结可信 baseline
-~~~
-
-完成可信 baseline 后，再进入 TaskNav 的 Geometry / Evidence / Cue Dropout 改造。
