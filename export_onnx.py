@@ -12,6 +12,7 @@ from ultralytics.models.yolo.lane.val import get_lane_head
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_WEIGHTS = PROJECT_ROOT / "runs" / "lane" / "train" / "weights" / "best.pt"
+REQUIRED_OPSET = 11
 
 
 class LaneONNXWrapper(torch.nn.Module):
@@ -46,7 +47,13 @@ def parse_args():
         help="Output .onnx path. Defaults to the checkpoint path with an .onnx suffix.",
     )
     parser.add_argument("--imgsz", type=int, default=640, help="Square model input size.")
-    parser.add_argument("--opset", type=int, default=18, help="ONNX opset version.")
+    parser.add_argument(
+        "--opset",
+        type=int,
+        default=REQUIRED_OPSET,
+        choices=[REQUIRED_OPSET],
+        help=f"ONNX opset version. TaskNav deployment is fixed to opset {REQUIRED_OPSET}.",
+    )
     parser.add_argument("--device", default="auto", help="Export device: auto, cpu, cuda, or cuda:N.")
     parser.add_argument(
         "--external-data",
@@ -123,6 +130,20 @@ def check_onnx(output: Path, expect_external_data: bool):
 
     onnx.checker.check_model(str(output))
     model = onnx.load(str(output), load_external_data=False)
+
+    main_opset = next(
+        (
+            int(item.version)
+            for item in model.opset_import
+            if item.domain in ("", "ai.onnx")
+        ),
+        None,
+    )
+    if main_opset != REQUIRED_OPSET:
+        raise RuntimeError(
+            f"ONNX opset mismatch: expected {REQUIRED_OPSET}, got {main_opset}."
+        )
+
     external_locations = set()
     for initializer in model.graph.initializer:
         if initializer.data_location == onnx.TensorProto.EXTERNAL:
@@ -215,6 +236,7 @@ def main():
     sidecars = check_onnx(output, expect_external_data=args.external_data)
 
     print(f"ONNX: {output} ({output.stat().st_size} bytes)")
+    print(f"ONNX opset: {REQUIRED_OPSET}")
     if sidecars:
         print(f"External data: {[str(output.parent / path) for path in sidecars]}")
     else:
