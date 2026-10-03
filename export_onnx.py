@@ -167,17 +167,26 @@ def verify_onnx_runtime(wrapper, output: Path, imgsz: int, device: torch.device,
     except ImportError as exc:
         raise RuntimeError("Runtime verification requires onnxruntime.") from exc
 
+    # Compare ONNX Runtime CPU against PyTorch CPU.
+    # This avoids treating normal CUDA-vs-CPU kernel differences as export errors.
+    wrapper_cpu = wrapper.to("cpu").eval()
+
     generator = torch.Generator(device="cpu").manual_seed(0)
-    verify_input = torch.rand((1, 3, imgsz, imgsz), generator=generator).to(device)
+    verify_input = torch.rand((1, 3, imgsz, imgsz), generator=generator)
+
     with torch.no_grad():
-        pytorch_outputs = tuple(t.detach().cpu().numpy() for t in wrapper(verify_input))
+        pytorch_outputs = tuple(t.detach().numpy() for t in wrapper_cpu(verify_input))
 
     session = ort.InferenceSession(str(output), providers=["CPUExecutionProvider"])
     input_name = session.get_inputs()[0].name
     output_names = [item.name for item in session.get_outputs()]
     if output_names != ["cls_logits", "offset"]:
         raise RuntimeError(f"Unexpected ONNX output names/order: {output_names}")
-    runtime_outputs = session.run(output_names, {input_name: verify_input.detach().cpu().numpy()})
+
+    runtime_outputs = session.run(
+        output_names,
+        {input_name: verify_input.numpy()},
+    )
 
     errors = {}
     for name, expected, actual in zip(output_names, pytorch_outputs, runtime_outputs):
@@ -229,6 +238,7 @@ def main():
         input_names=["images"],
         output_names=["cls_logits", "offset"],
         dynamic_axes=None,
+        dynamo=False,
         external_data=args.external_data,
     )
     if args.simplify:
