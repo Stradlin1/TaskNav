@@ -1,14 +1,70 @@
 # TaskNav full corrected loss, 10x10 AdaptiveAvgPool ablation.
+# Result-affecting parameters are pinned here so future default.yaml changes do not silently alter this experiment.
 task: lane
 mode: train
 model: ultralytics/cfg/models/26/yolo26s-lane-independent-10x10.yaml
 data: ultralytics/cfg/datasets/lane-robot-4tasks.yaml
-imgsz: 640
-batch: 16
+
+# Training budget and reproducibility
 epochs: 120
+patience: 25
+batch: 16
+imgsz: 640
+pretrained: False
 optimizer: AdamW
 seed: 0
+deterministic: False
+amp: False
+cos_lr: True
+fraction: 1.0
+rect: False
+multi_scale: 0.0
 
+# Optimizer and LR schedule
+lr0: 0.0003
+lrf: 0.02
+momentum: 0.937
+weight_decay: 0.015
+warmup_epochs: 3.0
+warmup_momentum: 0.8
+warmup_bias_lr: 0.0003
+nbs: 64
+
+# Data augmentation
+hsv_h: 0.01
+hsv_s: 0.3
+hsv_v: 0.3
+degrees: 0.0
+translate: 0.1
+scale: 0.2
+shear: 0.0
+perspective: 0.0
+flipud: 0.0
+fliplr: 0.0
+bgr: 0.0
+mosaic: 0.0
+mixup: 0.0
+
+# Lane protocol
+lane_x_grids: 160
+lane_row_anchors: 56
+lane_num_lanes: 4
+lane_task_weights: [1.0, 1.0, 1.0, 1.0]
+lane_strict_labels: True
+lane_y_start: 1.0
+lane_y_end: 0.3333333333
+
+# Lane classification, existence and decode settings
+lane_soft_label: True
+lane_soft_sigma: 1.2
+lane_label_smoothing: 0.02
+lane_softargmax_topk: 5
+lane_exist_thr: 0.5
+lane_post_smooth: True
+lane_poly_degree: 2
+lane_poly_blend: 0.5
+
+# Lane loss weights
 lane_ce: 1.0
 lane_loc: 2.0
 lane_exist: 1.0

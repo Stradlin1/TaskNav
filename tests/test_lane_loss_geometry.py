@@ -109,14 +109,31 @@ class TestLaneLossGeometry(unittest.TestCase):
         self.assertLess(float(components[4]), 1e-10)
 
     def test_nearest_grid_signed_offset_regression(self):
-        target_x = torch.tensor([100.8, 100.2], dtype=torch.float64)
-        target_class = target_x.round()
-        signed_offset = target_x - target_class
+        criterion = self._criterion()
+        target_x = torch.tensor(
+            [100.8, 100.2, 50.8, 50.2, 20.8, 20.2],
+            dtype=torch.float32,
+        ).view(1, self.rows, 1)
+        target = target_x.round().long()
+        valid = torch.ones_like(target, dtype=torch.bool)
 
-        torch.testing.assert_close(target_class, torch.tensor([101.0, 100.0], dtype=torch.float64))
-        torch.testing.assert_close(
-            signed_offset, torch.tensor([-0.2, 0.2], dtype=torch.float64), atol=1e-12, rtol=0.0
+        self.assertEqual(int(target[0, 0, 0]), 101)
+        self.assertEqual(int(target[0, 1, 0]), 100)
+        self.assertAlmostEqual(float(target_x[0, 0, 0] - target[0, 0, 0]), -0.2, places=5)
+        self.assertAlmostEqual(float(target_x[0, 1, 0] - target[0, 1, 0]), 0.2, places=5)
+
+        logits = self._peaked_logits(target)
+        perfect_offset = (target_x - target.float()).unsqueeze(1)
+        _, perfect_components = criterion._compute_single_task_loss(
+            logits, perfect_offset, target, target_x, valid
         )
+        self.assertLess(float(perfect_components[5]), 1e-10)
+
+        wrong_offset = torch.zeros_like(perfect_offset)
+        _, wrong_components = criterion._compute_single_task_loss(
+            logits, wrong_offset, target, target_x, valid
+        )
+        self.assertGreater(float(wrong_components[5]), 1e-5)
 
     def test_four_task_random_loss_and_components_are_finite(self):
         torch.manual_seed(0)
