@@ -11,6 +11,7 @@ from PIL import Image, ImageDraw, ImageOps
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
+DEFAULT_MODEL = Path("/home/xhm/Desktop/TaskNav/runs/lane/train/weights/bestbase.onnx")
 DEFAULT_SOURCE = Path("/home/xhm/Desktop/TaskNav/test")
 
 X_GRIDS = 160
@@ -41,8 +42,8 @@ def parse_args():
     parser.add_argument(
         "--model",
         type=Path,
-        required=True,
-        help="Path to exported TaskNav .onnx model.",
+        default=DEFAULT_MODEL,
+        help=f"Path to exported TaskNav .onnx model. Default: {DEFAULT_MODEL}",
     )
     parser.add_argument(
         "--source",
@@ -313,7 +314,6 @@ def draw_prediction(
     )
 
     radius = max(2, round(min(width, height) / 250))
-    line_width = max(2, round(min(width, height) / 300))
 
     for task in range(NUM_TASKS):
         color = COLORS[task % len(COLORS)]
@@ -358,13 +358,6 @@ def draw_prediction(
                     y + radius,
                 ),
                 fill=color,
-            )
-
-        if len(points) >= 2:
-            draw.line(
-                points,
-                fill=color,
-                width=line_width,
             )
 
         draw.text(

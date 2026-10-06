@@ -12,6 +12,7 @@ from ultralytics.models.yolo.lane.val import get_lane_head
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_WEIGHTS = PROJECT_ROOT / "runs" / "lane" / "train" / "weights" / "best.pt"
+DEFAULT_OUTPUT = DEFAULT_WEIGHTS.with_name("bestbase.onnx")
 REQUIRED_OPSET = 11
 
 
@@ -43,8 +44,8 @@ def parse_args():
     parser.add_argument(
         "--output",
         type=Path,
-        default=None,
-        help="Output .onnx path. Defaults to the checkpoint path with an .onnx suffix.",
+        default=DEFAULT_OUTPUT,
+        help=f"Output .onnx path. Default: {DEFAULT_OUTPUT}",
     )
     parser.add_argument("--imgsz", type=int, default=640, help="Square model input size.")
     parser.add_argument(
@@ -203,7 +204,7 @@ def verify_onnx_runtime(wrapper, output: Path, imgsz: int, device: torch.device,
 def main():
     args = parse_args()
     weights = args.weights.expanduser().resolve()
-    output = (args.output or weights.with_suffix(".onnx")).expanduser().resolve()
+    output = args.output.expanduser().resolve()
     if not weights.is_file():
         raise FileNotFoundError(f"Checkpoint does not exist: {weights}")
     if output.exists() and not args.overwrite:
